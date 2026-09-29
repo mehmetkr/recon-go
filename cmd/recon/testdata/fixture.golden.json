@@ -1,0 +1,119 @@
+{
+  "run_id": "9095c46bf193566e",
+  "config": {
+    "algo_version": 1,
+    "tz": "UTC",
+    "bank_layouts": [
+      "2006-01-02",
+      "2006-01-02T15:04:05Z07:00"
+    ],
+    "ledger_layouts": [
+      "2006-01-02",
+      "2006-01-02T15:04:05Z07:00"
+    ],
+    "date_tolerance": 3,
+    "fuzzy_window": 7,
+    "min_ref_len": 5,
+    "threshold_num": 4,
+    "threshold_den": 5,
+    "config_hash": "738cefda98ae8667fda8af261ec04de24549d46ededfd062d4d4d790e4748896"
+  },
+  "summary": {
+    "read": {
+      "bank": 4,
+      "ledger": 3
+    },
+    "matches": {
+      "date_tolerance": 1,
+      "exact": 1,
+      "fuzzy_reference": 0
+    },
+    "exceptions": {
+      "bank": {
+        "ambiguous": 0,
+        "counterpart_taken": 0,
+        "no_amount_match": 2,
+        "no_rule_match": 0
+      },
+      "ledger": {
+        "ambiguous": 0,
+        "counterpart_taken": 0,
+        "no_amount_match": 1,
+        "no_rule_match": 0
+      }
+    },
+    "malformed": {
+      "bank": 1,
+      "ledger": 1
+    },
+    "excluded": {
+      "bank": 0,
+      "ledger": 0
+    }
+  },
+  "matches": [
+    {
+      "match_id": "09186ec7c403accc6029d5e01d38fee2",
+      "bank_id": "484f0bcf0feec40e6a2f98aa4a92e23c",
+      "ledger_id": "b0d47823f4ea5a6e7abee7cb11d238d4",
+      "rule": "exact",
+      "day_delta": 0
+    },
+    {
+      "match_id": "cb72304a93d83a19ab0c3620d77d90e6",
+      "bank_id": "91caa732981c94d2af02082773583038",
+      "ledger_id": "3278c0534a8a979cb2e6ade9099463be",
+      "rule": "date_tolerance",
+      "day_delta": -2
+    }
+  ],
+  "exceptions": [
+    {
+      "source": "bank",
+      "id": "dada312e797c61219a5507237d1ace93",
+      "reason": "no_amount_match",
+      "candidates": []
+    },
+    {
+      "source": "bank",
+      "id": "e3653fbc8e1eb5e8c7b67c2f2adc715f",
+      "reason": "no_amount_match",
+      "candidates": []
+    },
+    {
+      "source": "ledger",
+      "id": "b52ac65233145aa57db3af2e20daae19",
+      "reason": "no_amount_match",
+      "candidates": []
+    }
+  ],
+  "malformed": [
+    {
+      "source": "bank",
+      "line": 6,
+      "reason": "field_count",
+      "detail": "expected 5 fields, got 1",
+      "raw": [
+        "broken row"
+      ]
+    },
+    {
+      "source": "ledger",
+      "line": 5,
+      "reason": "bad_amount",
+      "detail": "both debit and credit are set",
+      "raw": [
+        "ACC-1",
+        "2026-09-05",
+        "10.00",
+        "5.00",
+        "EUR",
+        "both sides"
+      ]
+    }
+  ],
+  "excluded": {
+    "bank": 0,
+    "ledger": 0
+  }
+}

@@ -107,7 +107,12 @@ func Reconcile(bank, ledger, taken []domain.Transaction, p Params) Result {
 	for _, pt := range parts {
 		pt.run(rs, &res)
 	}
-	// The final order never depends on processing order.
+	sortResult(&res)
+	return res
+}
+
+// sortResult puts results in a fixed order that never depends on processing order.
+func sortResult(res *Result) {
 	slices.SortFunc(res.Matches, func(a, b domain.Match) int {
 		return cmp.Or(cmp.Compare(a.BankID, b.BankID), cmp.Compare(a.LedgerID, b.LedgerID),
 			cmp.Compare(a.Rule, b.Rule), cmp.Compare(a.DayDelta, b.DayDelta), cmp.Compare(a.MatchID, b.MatchID))
@@ -116,7 +121,6 @@ func Reconcile(bank, ledger, taken []domain.Transaction, p Params) Result {
 		return cmp.Or(cmp.Compare(a.Source, b.Source), cmp.Compare(a.ID, b.ID),
 			cmp.Compare(a.Reason, b.Reason), slices.Compare(a.Candidates, b.Candidates))
 	})
-	return res
 }
 
 type status int
