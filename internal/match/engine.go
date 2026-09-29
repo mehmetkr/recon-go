@@ -73,6 +73,10 @@ func rules(p Params) []rule {
 		{domain.RuleDateTolerance, func(c *pair) bool {
 			return c.absDelta() <= p.DateTolerance
 		}},
+		// A matching reference earns a wider date window.
+		{domain.RuleFuzzyReference, func(c *pair) bool {
+			return c.absDelta() <= p.FuzzyWindow && c.similarity().strong()
+		}},
 	}
 }
 

@@ -65,12 +65,15 @@ func refEligible(rule int, b, l domain.Transaction, p Params) bool {
 	switch rule {
 	case 0:
 		return days == 0 && len(b.RefNorm) >= MinRefLen && b.RefNorm == l.RefNorm
-	default:
+	case 1:
 		return days <= p.DateTolerance
+	default:
+		d, n, ev := refSim(b.RefNorm, l.RefNorm)
+		return days <= p.FuzzyWindow && ev && 5*d <= n
 	}
 }
 
-const refRules = 2
+const refRules = 3
 
 func refReconcile(bank, ledger, taken []domain.Transaction, p Params) Result {
 	const (
@@ -247,7 +250,7 @@ func randomCase(rng *rand.Rand) (bank, ledger, taken []domain.Transaction, p Par
 		for i := range n {
 			r := rec{
 				id:     fmt.Sprintf("%s%02d", prefix, i),
-				day:    rng.IntN(7) - 3,
+				day:    rng.IntN(11) - 5,
 				ref:    refs[rng.IntN(len(refs))],
 				amount: int64(100 * (1 + rng.IntN(2))),
 			}
@@ -262,7 +265,8 @@ func randomCase(rng *rand.Rand) (bank, ledger, taken []domain.Transaction, p Par
 	bank = gen(domain.Bank, "B", rng.IntN(7))
 	ledger = gen(domain.Ledger, "L", rng.IntN(7))
 	taken = append(gen(domain.Bank, "TB", rng.IntN(3)), gen(domain.Ledger, "TL", rng.IntN(3))...)
-	return bank, ledger, taken, Params{DateTolerance: rng.IntN(4), FuzzyWindow: 7}
+	n := rng.IntN(4)
+	return bank, ledger, taken, Params{DateTolerance: n, FuzzyWindow: n + 1 + rng.IntN(6)}
 }
 
 func TestReconcileMatchesReference(t *testing.T) {

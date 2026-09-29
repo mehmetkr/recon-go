@@ -254,6 +254,43 @@ func TestScenarios(t *testing.T) {
 	})
 }
 
+func TestFuzzyPass(t *testing.T) {
+	run(t, []scenario{
+		{name: "a matching reference widens the window",
+			bank:   banks(rec{id: "B1", day: 7, ref: "PAYMENT INV10023 ACME"}, rec{id: "B2", day: -7, ref: "INV20023", amount: 200}),
+			ledger: ledgers(rec{id: "L1", ref: "INV10023"}, rec{id: "L2", ref: "INV20O23", amount: 200}),
+			want:   []string{"B1-L1 fuzzy_reference 7", "B2-L2 fuzzy_reference -7"}},
+		{name: "but only so far",
+			bank:   banks(rec{id: "B1", day: 8, ref: "INV10023"}, rec{id: "B2", day: -8, ref: "INV20023", amount: 200}),
+			ledger: ledgers(rec{id: "L1", ref: "INV10023"}, rec{id: "L2", ref: "INV20023", amount: 200}),
+			want:   []string{"B1 no_rule_match", "B2 no_rule_match", "L1 no_rule_match", "L2 no_rule_match"}},
+		{name: "no evidence never widens the window",
+			bank:   banks(rec{id: "B1", day: 6}, rec{id: "B2", day: 5, ref: "INV10023", amount: 200}),
+			ledger: ledgers(rec{id: "L1"}, rec{id: "L2", ref: "ZZZZZZZZ", amount: 200}),
+			want:   []string{"B1 no_rule_match", "B2 no_rule_match", "L1 no_rule_match", "L2 no_rule_match"}},
+		// Two edits in eight characters is not close enough.
+		{name: "weak likeness is not enough", bank: banks(rec{id: "B1", day: 5, ref: "INV10023"}), ledger: ledgers(rec{id: "L1", ref: "INV19923"}),
+			want: []string{"B1 no_rule_match", "L1 no_rule_match"}},
+		{name: "a tie from the date step stays a tie", bank: banks(rec{id: "B1", ref: "INV10001"}),
+			ledger: ledgers(rec{id: "L1", day: -1, ref: "ZZZZZZZZ"}, rec{id: "L2", day: 1, ref: "YYYYYYYY"}, rec{id: "L3", day: 6, ref: "INV10001"}),
+			want:   []string{"B1 ambiguous L1,L2", "L1 ambiguous B1", "L2 ambiguous B1", "L3 counterpart_taken B1"}},
+		{name: "the date step wins over a better reference", bank: banks(rec{id: "B1", ref: "INV10001"}),
+			ledger: ledgers(rec{id: "L1", day: 2, ref: "ZZZZZZZZ"}, rec{id: "L2", day: 5, ref: "INV10001"}),
+			want:   []string{"B1-L1 date_tolerance -2", "L2 counterpart_taken B1"}},
+		{name: "the closer strong candidate wins", bank: banks(rec{id: "B1", ref: "INV10001"}),
+			ledger: ledgers(rec{id: "L1", day: 6, ref: "INV10001"}, rec{id: "L2", day: -5, ref: "INV10001"}),
+			want:   []string{"B1-L2 fuzzy_reference 5", "L1 counterpart_taken B1"}},
+		{name: "the better reference wins at equal distance", bank: banks(rec{id: "B1", ref: "INV10001"}),
+			ledger: ledgers(rec{id: "L1", day: 5, ref: "INV10X01"}, rec{id: "L2", day: -5, ref: "INV10001"}),
+			want:   []string{"B1-L2 fuzzy_reference 5", "L1 counterpart_taken B1"}},
+		{name: "equally strong candidates tie", bank: banks(rec{id: "B1", ref: "INV10001"}),
+			ledger: ledgers(rec{id: "L1", day: 5, ref: "INV10001"}, rec{id: "L2", day: -5, ref: "XINV10001"}),
+			want:   []string{"B1 ambiguous L1,L2", "L1 ambiguous B1", "L2 ambiguous B1"}},
+		{name: "the window follows the setting", bank: banks(rec{id: "B1", day: 5, ref: "INV10023"}), ledger: ledgers(rec{id: "L1", ref: "INV10023"}),
+			p: Params{DateTolerance: 1, FuzzyWindow: 4}, want: []string{"B1 no_rule_match", "L1 no_rule_match"}},
+	})
+}
+
 func TestOutputOrderIsFixed(t *testing.T) {
 	// The output order must hold even if identities were to repeat.
 	var br, lr []rec
@@ -282,6 +319,11 @@ func shuffleFixture() (bank, ledger, taken []domain.Transaction) {
 		rec{id: "L04", day: 2, ref: "ZZZZZZZZ"}, rec{id: "L05", amount: 300}, rec{id: "L06", amount: 400},
 		rec{id: "L07", amount: 400, occ: 1}, rec{id: "L08", amount: 500}, rec{id: "L09", amount: 600}, rec{id: "L10", day: 3, amount: 600},
 		rec{id: "A01", amount: 700, ref: "INV70001"}, rec{id: "L11", amount: 700, day: 1}, rec{id: "L12", amount: 700, ref: "INV70002"})
+	// Reference cases: a late match, a tie and a match too far apart.
+	bank = append(bank, banks(rec{id: "B21", amount: 800, day: 6, ref: "PAYMENT INV80001"},
+		rec{id: "B22", amount: 900, ref: "INV90001"}, rec{id: "B23", amount: 950, day: 9, ref: "INV95001"})...)
+	ledger = append(ledger, ledgers(rec{id: "L21", amount: 800, ref: "INV80001"}, rec{id: "L22", amount: 900, day: 5, ref: "INV90001"},
+		rec{id: "L23", amount: 900, day: -5, ref: "XINV90001"}, rec{id: "L24", amount: 950, ref: "INV95001"})...)
 	return bank, ledger, banks(rec{id: "T01", amount: 700, day: 2})
 }
 
