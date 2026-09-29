@@ -20,8 +20,8 @@ func bigInputs(t *testing.T, n int) (bank, ledger string) {
 	t.Helper()
 	dir := t.TempDir()
 	var b, l strings.Builder
-	b.WriteString("account,date,amount,currency,reference\n")
-	l.WriteString("account,date,debit,credit,currency,reference\n")
+	b.WriteString(bankHeader)
+	l.WriteString(ledgerHeader)
 	for i := range n {
 		date := fmt.Sprintf("2026-%02d-%02d", 1+i%12, 1+i%28)
 		fmt.Fprintf(&b, "ACC-1,%s,%d.00,EUR,PAYMENT REFERENCE INV%08d\n", date, 1+i%500, i)
@@ -45,7 +45,7 @@ type child struct {
 
 func startChild(t *testing.T, wrap []string, args ...string) *child {
 	t.Helper()
-	argv := append(append(wrap, testBinary), args...)
+	argv := append(append(wrap, testBinary), withState(t, args)...)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), "RECON_TEST_RUN_MAIN=1")
 	stderr, err := cmd.StderrPipe()

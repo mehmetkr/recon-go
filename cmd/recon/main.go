@@ -60,11 +60,12 @@ func (l *layouts) Set(v string) error {
 }
 
 type options struct {
-	bankPath, ledgerPath, outPath string
-	tz                            string
-	bankLayouts, ledgerLayouts    layouts
-	params                        match.Params
-	workers                       int
+	bankPath, ledgerPath, outPath, statePath string
+	force                                    bool
+	tz                                       string
+	bankLayouts, ledgerLayouts               layouts
+	params                                   match.Params
+	workers                                  int
 }
 
 func parseFlags(args []string, stderr io.Writer) (options, error) {
@@ -74,6 +75,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.bankPath, "bank", "", "bank statement CSV (required)")
 	fs.StringVar(&o.ledgerPath, "ledger", "", "ledger export CSV (required)")
 	fs.StringVar(&o.outPath, "out", "results.json", `report file, or "-" for stdout`)
+	fs.StringVar(&o.statePath, "state", "state.json", "file remembering earlier runs and their matches")
+	fs.BoolVar(&o.force, "force", false, "reconcile again even if these inputs and settings were already reconciled")
 	fs.StringVar(&o.tz, "tz", "UTC", "IANA booking time zone")
 	fs.Var(&o.bankLayouts, "bank-date-layout", "Go date layout for the bank file (repeatable; replaces the defaults)")
 	fs.Var(&o.ledgerLayouts, "ledger-date-layout", "Go date layout for the ledger file (repeatable; replaces the defaults)")
@@ -92,7 +95,10 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	if o.outPath == "" {
 		return o, errors.New(`-out must be a file path or "-"`)
 	}
-	if err := checkOutNotInput(o); err != nil {
+	if o.statePath == "" {
+		return o, errors.New("-state must be a file path")
+	}
+	if err := checkPaths(o); err != nil {
 		return o, err
 	}
 	if len(o.bankLayouts) == 0 {
@@ -110,21 +116,42 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	return o, nil
 }
 
-// checkOutNotInput refuses to write the report over one of its own inputs.
-func checkOutNotInput(o options) error {
-	if o.outPath == "-" {
-		return nil
-	}
-	out, err := os.Stat(o.outPath)
-	if err != nil {
-		return nil // a new file is fine
-	}
+// checkPaths refuses to write the report or the state over an input, or over each other.
+func checkPaths(o options) error {
 	for _, in := range []string{o.bankPath, o.ledgerPath} {
-		if fi, err := os.Stat(in); err == nil && os.SameFile(out, fi) {
+		if o.outPath != "-" && sameFile(o.outPath, in) {
 			return fmt.Errorf("-out %s is also an input file", o.outPath)
 		}
+		if sameFile(o.statePath, in) {
+			return fmt.Errorf("-state %s is also an input file", o.statePath)
+		}
+	}
+	if o.outPath != "-" && sameFile(o.outPath, o.statePath) {
+		return errors.New("-out and -state must be different files")
 	}
 	return nil
+}
+
+// sameFile reports whether two paths name the same file, existing or not.
+func sameFile(a, b string) bool {
+	if store.Resolve(a) == store.Resolve(b) {
+		return true
+	}
+	fa, errA := os.Stat(a)
+	fb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(fa, fb)
+}
+
+// setAside splits records into those still free and those paired in an earlier run.
+func setAside(records []domain.Transaction, matched map[string]bool) (free, taken []domain.Transaction) {
+	for _, t := range records {
+		if matched[t.ID] {
+			taken = append(taken, t)
+		} else {
+			free = append(free, t)
+		}
+	}
+	return free, taken
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -165,7 +192,10 @@ func writeReport(ctx context.Context, outPath string, out []byte, stdout io.Writ
 		return err
 	}
 	if outPath != "-" {
-		return store.WriteAtomic(ctx, outPath, out)
+		if err := store.WriteAtomic(ctx, outPath, out); err != nil {
+			return fmt.Errorf("writing report %s: %w", outPath, err)
+		}
+		return nil
 	}
 	if _, err := stdout.Write(out); err != nil {
 		return err
@@ -186,6 +216,14 @@ func readUTF8(path string) ([]byte, error) {
 }
 
 func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config, stdout io.Writer, log *slog.Logger) error {
+	state, err := store.Load(o.statePath)
+	if err != nil {
+		return err
+	}
+	// Settings that shape record identities must match the ones the state was built with.
+	if err := state.Lock(o.tz, bankCfg.Layouts, ledgerCfg.Layouts); err != nil {
+		return fmt.Errorf("%s: %w", o.statePath, err)
+	}
 	bankRaw, err := readUTF8(o.bankPath)
 	if err != nil {
 		return err
@@ -194,15 +232,6 @@ func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config,
 	if err != nil {
 		return err
 	}
-	bank, bankErrs, err := ingest.Parse(bytes.NewReader(bankRaw), domain.Bank, bankCfg)
-	if err != nil {
-		return fmt.Errorf("%s: %w", o.bankPath, err)
-	}
-	ledger, ledgerErrs, err := ingest.Parse(bytes.NewReader(ledgerRaw), domain.Ledger, ledgerCfg)
-	if err != nil {
-		return fmt.Errorf("%s: %w", o.ledgerPath, err)
-	}
-
 	cfg := store.Config{
 		AlgoVersion:   store.AlgoVersion,
 		TZ:            o.tz,
@@ -214,16 +243,36 @@ func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config,
 		ThresholdNum:  match.ThresholdNum,
 		ThresholdDen:  match.ThresholdDen,
 	}
-	runID := store.RunID(store.FileHash(bankRaw), store.FileHash(ledgerRaw), store.ConfigHash(cfg))
+	entry := store.Run{BankSHA: store.FileHash(bankRaw), LedgerSHA: store.FileHash(ledgerRaw), ConfigHash: store.ConfigHash(cfg)}
+	entry.RunID = store.RunID(entry.BankSHA, entry.LedgerSHA, entry.ConfigHash)
+	if state.HasRun(entry.RunID) && !o.force {
+		log.Info("already reconciled; nothing written (use -force to run again)", "run_id", entry.RunID)
+		return nil
+	}
 
-	res, err := runMatch(ctx, bank, ledger, nil, o.params, o.workers)
+	bank, bankErrs, err := ingest.Parse(bytes.NewReader(bankRaw), domain.Bank, bankCfg)
+	if err != nil {
+		return fmt.Errorf("%s: %w", o.bankPath, err)
+	}
+	ledger, ledgerErrs, err := ingest.Parse(bytes.NewReader(ledgerRaw), domain.Ledger, ledgerCfg)
+	if err != nil {
+		return fmt.Errorf("%s: %w", o.ledgerPath, err)
+	}
+
+	// Records paired in an earlier run are set aside: they never match again.
+	matchedBank, matchedLedger := state.MatchedIDs()
+	freeBank, takenBank := setAside(bank, matchedBank)
+	freeLedger, takenLedger := setAside(ledger, matchedLedger)
+
+	res, err := runMatch(ctx, freeBank, freeLedger, append(takenBank, takenLedger...), o.params, o.workers)
 	if err != nil {
 		return err
 	}
 	rep := report.Build(report.Input{
-		RunID:     runID,
+		RunID:     entry.RunID,
 		Config:    cfg,
 		Read:      map[domain.Source]int{domain.Bank: len(bank), domain.Ledger: len(ledger)},
+		Excluded:  map[domain.Source]int{domain.Bank: len(takenBank), domain.Ledger: len(takenLedger)},
 		Result:    res,
 		Malformed: append(bankErrs, ledgerErrs...),
 	})
@@ -231,17 +280,25 @@ func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config,
 	if err != nil {
 		return err
 	}
+	if err := state.AddRun(entry, res.Matches); err != nil {
+		return err
+	}
+	// The report is saved first: if it cannot be written, the state file stays as it was.
 	if err := writeReport(ctx, o.outPath, out, stdout); err != nil {
+		return err
+	}
+	if err := state.Save(ctx, o.statePath); err != nil {
 		return err
 	}
 
 	s := rep.Summary
 	log.Info("reconciled",
-		"run_id", runID,
+		"run_id", entry.RunID,
 		"bank", s.Read[domain.Bank], "ledger", s.Read[domain.Ledger],
 		"matched", len(rep.Matches),
 		"exceptions", len(rep.Exceptions),
 		"malformed", len(rep.Malformed),
+		"excluded_bank", s.Excluded[domain.Bank], "excluded_ledger", s.Excluded[domain.Ledger],
 		"out", o.outPath)
 	return nil
 }

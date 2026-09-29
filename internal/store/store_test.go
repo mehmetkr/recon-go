@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -61,6 +62,19 @@ func TestWriteAtomic(t *testing.T) {
 		t.Errorf("content %q, mode %v; want the latest content, readable like a normal file", b, info.Mode().Perm())
 	}
 	assertOnlyFiles(t, dir, "results.json")
+	// Writing through a link updates the file it points to and keeps the link.
+	link := filepath.Join(dir, "link.json")
+	os.Symlink("results.json", link)
+	if err := WriteAtomic(context.Background(), link, []byte("third")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "third" {
+		t.Errorf("the linked file holds %q, want third", b)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the link was replaced by a plain file")
+	}
+	os.Remove(link)
 	// The longest name most file systems allow must still work.
 	if err := WriteAtomic(context.Background(), filepath.Join(dir, strings.Repeat("r", 250)+".json"), []byte("x")); err != nil {
 		t.Errorf("long name: %v", err)
@@ -69,6 +83,41 @@ func TestWriteAtomic(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join(dir, "does-not-exist"))
 	if err := WriteAtomic(context.Background(), path, []byte("x")); err != nil {
 		t.Errorf("the system temp folder was used: %v", err)
+	}
+}
+
+func TestResolve(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Chdir(root)
+	os.MkdirAll("d/deep", 0o755)
+	os.WriteFile("f.txt", nil, 0o644)
+	for link, target := range map[string]string{
+		"l1": "l2", "l2": "l3", "l3": "l4", "l4": "l5", "l5": "f.txt", "deep_link": "d/deep", "dangling": "d/new.json",
+		"absolute": filepath.Join(root, "d", "abs.json"),
+		"out2":     "deep_link/../y.json", "out1": "out2", "loop_a": "loop_b", "loop_b": "loop_a",
+	} {
+		os.Symlink(target, link)
+	}
+	for in, want := range map[string]string{
+		"f.txt":               "f.txt",
+		"new.json":            "new.json",
+		root + "/new.json":    "new.json",
+		"l1":                  "f.txt",
+		"dangling":            "d/new.json",
+		"absolute":            "d/abs.json",
+		"deep_link/../x.json": "d/x.json",
+		"out1":                "d/y.json",
+	} {
+		if got := Resolve(in); got != filepath.Join(root, want) {
+			t.Errorf("Resolve(%s) = %s, want %s", in, got, filepath.Join(root, want))
+		}
+	}
+	// A loop of links is refused, and the links are kept.
+	if err := WriteAtomic(context.Background(), "loop_a", []byte("x")); err == nil || !strings.Contains(err.Error(), "too many links") {
+		t.Errorf("a loop of links: %v", err)
+	}
+	if info, err := os.Lstat("loop_a"); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the loop was replaced by a plain file")
 	}
 }
 
@@ -130,15 +179,16 @@ func TestWriteAtomicFailures(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(occupied, "keep"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A file cannot replace a folder that has contents, nor go where no folder exists.
+	// A file cannot replace a folder that has contents, nor go where no folder exists; the reason names no file.
 	for _, path := range []string{occupied, filepath.Join(dir, "missing", "f")} {
-		if WriteAtomic(context.Background(), path, []byte("x")) == nil {
-			t.Errorf("writing %s succeeded", path)
+		if err := WriteAtomic(context.Background(), path, []byte("x")); err == nil || strings.Contains(err.Error(), dir) {
+			t.Errorf("writing %s: %v, want a reason without file names", path, err)
 		}
 	}
 	assertOnlyFiles(t, dir, "occupied")
 }
 
+// assertOnlyFiles checks that a folder holds exactly these files, so nothing temporary was left behind.
 func assertOnlyFiles(t *testing.T, dir string, want ...string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -149,7 +199,7 @@ func assertOnlyFiles(t *testing.T, dir string, want ...string) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if strings.Join(names, ",") != strings.Join(want, ",") {
+	if !slices.Equal(names, want) {
 		t.Errorf("folder holds %v, want %v", names, want)
 	}
 }

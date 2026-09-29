@@ -25,15 +25,18 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
+// The header rows of the two exports.
+const bankHeader, ledgerHeader = "account,date,amount,currency,reference\n", "account,date,debit,credit,currency,reference\n"
+
 // The two sides hold different numbers of rows, so a mix-up would show.
-const bankCSV = "account,date,amount,currency,reference\n" +
+const bankCSV = bankHeader +
 	"ACC-1,2026-09-01,-150.00,EUR,INV-1001\n" +
 	"ACC-1,2026-09-03,980.00,EUR,Payout\n" +
 	"ACC-1,2026-09-02,75.50,EUR,x\n" +
 	"ACC-2,2026-09-02,12.00,USD,unmatched\n" +
 	"broken row\n"
 
-const ledgerCSV = "account,date,debit,credit,currency,reference\n" +
+const ledgerCSV = ledgerHeader +
 	"ACC-1,2026-09-01,,150.00,EUR,INV1001\n" +
 	"ACC-1,2026-09-01,1000.00,,EUR,Payout\n" +
 	"ACC-1,2026-09-04,75.50,,EUR,y\n" +
@@ -52,9 +55,17 @@ func fixture(t *testing.T, bank, ledger string) (dir, bankPath, ledgerPath strin
 	return dir, bankPath, ledgerPath
 }
 
-func runCLI(args ...string) (code int, stdout, stderr string) {
+// withState gives a run its own empty state file unless one is named.
+func withState(t *testing.T, args []string) []string {
+	if slices.Contains(args, "-state") {
+		return args
+	}
+	return append(slices.Clone(args), "-state", filepath.Join(t.TempDir(), "state.json"))
+}
+
+func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	var out, errOut bytes.Buffer
-	code = run(context.Background(), args, &out, &errOut)
+	code = run(context.Background(), withState(t, args), &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 
@@ -62,18 +73,25 @@ type results struct {
 	RunID   string         `json:"run_id"`
 	Config  map[string]any `json:"config"`
 	Matches []struct {
-		Rule string `json:"rule"`
+		BankID   string `json:"bank_id"`
+		LedgerID string `json:"ledger_id"`
+		Rule     string `json:"rule"`
 	} `json:"matches"`
+	Exceptions []struct {
+		Source     string   `json:"source"`
+		Reason     string   `json:"reason"`
+		Candidates []string `json:"candidates"`
+	} `json:"exceptions"`
+	Summary struct {
+		Read     map[string]int `json:"read"`
+		Excluded map[string]int `json:"excluded"`
+	} `json:"summary"`
 }
 
 // reportOf runs the command with the report on standard output and reads it back.
 func reportOf(t *testing.T, args ...string) results {
 	t.Helper()
-	code, stdout, stderr := runCLI(append(args, "-out", "-")...)
-	var r results
-	if code != exitOK || json.Unmarshal([]byte(stdout), &r) != nil {
-		t.Fatalf("%v: exit %d, stderr:\n%s", args, code, stderr)
-	}
+	r, _ := step(t, filepath.Join(t.TempDir(), "state.json"), args...)
 	return r
 }
 
@@ -92,7 +110,7 @@ func TestOutput(t *testing.T) {
 	dir, bank, ledger := fixture(t, bankCSV, ledgerCSV)
 	t.Chdir(dir)
 	if *update {
-		_, stdout, _ := runCLI("-bank", bank, "-ledger", ledger, "-out", "-")
+		_, stdout, _ := runCLI(t, "-bank", bank, "-ledger", ledger, "-out", "-")
 		if err := os.WriteFile(filepath.Join(testdataDir, "fixture.golden.json"), []byte(stdout), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -113,7 +131,7 @@ func TestOutput(t *testing.T) {
 			if tt.out != "" {
 				args = append(args, "-out", tt.out)
 			}
-			code, stdout, stderr := runCLI(args...)
+			code, stdout, stderr := runCLI(t, args...)
 			got := stdout
 			if tt.out != "-" {
 				file := tt.out
@@ -144,7 +162,7 @@ func TestOutput(t *testing.T) {
 // TestRealMainWritesReportToStdout runs the real command and checks where output goes.
 func TestRealMainWritesReportToStdout(t *testing.T) {
 	_, bank, ledger := fixture(t, bankCSV, ledgerCSV)
-	cmd := exec.Command(testBinary, "-bank", bank, "-ledger", ledger, "-out", "-")
+	cmd := exec.Command(testBinary, withState(t, []string{"-bank", bank, "-ledger", ledger, "-out", "-"})...)
 	cmd.Env = append(os.Environ(), "RECON_TEST_RUN_MAIN=1")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -176,8 +194,8 @@ func TestFlagsReachTheEngine(t *testing.T) {
 			[]string{"-date-tolerance", "5", "-fuzzy-window", "6"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, bank, ledger := fixture(t, "account,date,amount,currency,reference\n"+tt.bank+"\n",
-				"account,date,debit,credit,currency,reference\n"+tt.ledger+"\n")
+			_, bank, ledger := fixture(t, bankHeader+tt.bank+"\n",
+				ledgerHeader+tt.ledger+"\n")
 			var rules []string
 			for _, m := range reportOf(t, append([]string{"-bank", bank, "-ledger", ledger}, tt.flags...)...).Matches {
 				rules = append(rules, m.Rule)
@@ -252,32 +270,48 @@ func TestWorkersFlagReachesTheRunner(t *testing.T) {
 	}
 }
 
-func TestOutputMustNotBeAnInput(t *testing.T) {
+func TestPathsMustNotClash(t *testing.T) {
 	dir, _, _ := fixture(t, bankCSV, ledgerCSV)
 	t.Chdir(dir)
 	os.Link("bank.csv", "hard.csv")
 	os.Symlink("ledger.csv", "sym.csv")
 	os.Symlink("bank.csv", "bank_link.csv")
+	os.Mkdir("d", 0o755)
+	os.Symlink("d", "d_link")
 	os.WriteFile("-", []byte(bankCSV), 0o644)
+	os.WriteFile("old.json", nil, 0o644)
 	abs := filepath.Join(dir, "bank.csv")
+	outClash := func(out string) string { return "-out " + out + " is also an input file" }
 	for _, tt := range []struct {
-		bank, out string
-		code      int
+		bank, out, state, msg string
+		code                  int
 	}{
-		{"bank.csv", abs, exitUsage},
-		{"bank.csv", "ledger.csv", exitUsage},
-		{"bank.csv", "./bank.csv", exitUsage},
-		{abs, "bank.csv", exitUsage},
-		{"bank.csv", "./ledger.csv", exitUsage},
-		{"bank.csv", "hard.csv", exitUsage},
-		{"bank.csv", "sym.csv", exitUsage},
-		{"bank_link.csv", "bank.csv", exitUsage},
-		// A file named "-" is still a file, not standard output.
-		{"-", "-", exitOK},
+		{"bank.csv", abs, "s.json", outClash(abs), exitUsage},
+		{"bank.csv", "ledger.csv", "s.json", outClash("ledger.csv"), exitUsage},
+		{"bank.csv", "./bank.csv", "s.json", outClash("./bank.csv"), exitUsage},
+		{abs, "bank.csv", "s.json", outClash("bank.csv"), exitUsage},
+		{"bank.csv", "./ledger.csv", "s.json", outClash("./ledger.csv"), exitUsage},
+		{"bank.csv", "hard.csv", "s.json", outClash("hard.csv"), exitUsage},
+		{"bank.csv", "sym.csv", "s.json", outClash("sym.csv"), exitUsage},
+		{"bank_link.csv", "bank.csv", "s.json", outClash("bank.csv"), exitUsage},
+		// The state file follows the same rule, and must not be the report either.
+		{"bank.csv", "r.json", "./ledger.csv", "-state ./ledger.csv is also an input file", exitUsage},
+		{"bank.csv", "r.json", "hard.csv", "-state hard.csv is also an input file", exitUsage},
+		{"bank.csv", "d_link/x.json", "d/x.json", "-out and -state must be different files", exitUsage},
+		// In a missing folder, two files fail only when written, while one file named twice still clashes.
+		{"bank.csv", "missing/r.json", "missing/s.json", "no such file or directory", exitFatal},
+		{"bank.csv", "missing/r.json", "./missing/r.json", "-out and -state must be different files", exitUsage},
+		// An earlier report is simply replaced.
+		{"bank.csv", "old.json", "s.json", "", exitOK},
+		// An input named "-" is a file, while -out - is standard output.
+		{"-", "-", "s.json", "", exitOK},
+		// A state named "-" is a file too, here one that holds no state.
+		{"bank.csv", "-", "-", "- is unreadable", exitFatal},
 	} {
-		code, _, stderr := runCLI("-bank", tt.bank, "-ledger", "ledger.csv", "-out", tt.out)
-		if code != tt.code || code == exitUsage && !strings.Contains(stderr, "is also an input file") {
-			t.Errorf("-bank %s -out %s: exit %d, stderr:\n%s", tt.bank, tt.out, code, stderr)
+		os.Remove("s.json")
+		code, _, stderr := runCLI(t, "-bank", tt.bank, "-ledger", "ledger.csv", "-out", tt.out, "-state", tt.state)
+		if code != tt.code || !strings.Contains(stderr, tt.msg) {
+			t.Errorf("-bank %s -out %s -state %s: exit %d, want %d explaining %q:\n%s", tt.bank, tt.out, tt.state, code, tt.code, tt.msg, stderr)
 		}
 	}
 	for file, want := range map[string]string{"bank.csv": bankCSV, "ledger.csv": ledgerCSV} {
@@ -353,7 +387,7 @@ func TestInterruptedRunIsFatal(t *testing.T) {
 				return res, err
 			}
 			var stdout, stderr bytes.Buffer
-			code := run(ctx, []string{"-bank", bank, "-ledger", ledger, "-out", out}, &stdout, &stderr)
+			code := run(ctx, withState(t, []string{"-bank", bank, "-ledger", ledger, "-out", out}), &stdout, &stderr)
 			runMatch = match.Run
 			cancel()
 			if _, err := os.Stat(filepath.Join(dir, "results.json")); code != exitFatal || stdout.Len() != 0 || !os.IsNotExist(err) {
@@ -372,8 +406,8 @@ func TestFatalErrors(t *testing.T) {
 	files := map[string]string{
 		"bad_bank.csv":      "account,date\n",
 		"bad_ledger.csv":    "no,header,here\n",
-		"latin1_bank.csv":   "account,date,amount,currency,reference\nACC-1,2026-09-01,1.00,EUR,M\xfcller\n",
-		"latin1_ledger.csv": "account,date,debit,credit,currency,reference\nACC-1,2026-09-01,1.00,,EUR,M\xfcller\n",
+		"latin1_bank.csv":   bankHeader + "ACC-1,2026-09-01,1.00,EUR,M\xfcller\n",
+		"latin1_ledger.csv": ledgerHeader + "ACC-1,2026-09-01,1.00,,EUR,M\xfcller\n",
 	}
 	for name, content := range files {
 		os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
@@ -397,7 +431,7 @@ func TestFatalErrors(t *testing.T) {
 		if tt.stdout != nil {
 			w = tt.stdout
 		}
-		code := run(context.Background(), []string{"-bank", tt.bank, "-ledger", tt.ledger, "-out", tt.out}, w, &stderr)
+		code := run(context.Background(), withState(t, []string{"-bank", tt.bank, "-ledger", tt.ledger, "-out", tt.out}), w, &stderr)
 		if _, err := os.Stat(out); code != exitFatal || stdout.Len() != 0 || !os.IsNotExist(err) ||
 			!strings.Contains(stderr.String(), "level=ERROR") || !strings.Contains(stderr.String(), tt.want) {
 			t.Errorf("want exit %d naming %q and nothing written; got exit %d:\n%s", exitFatal, tt.want, code, stderr.String())
@@ -430,8 +464,9 @@ func TestUsageErrors(t *testing.T) {
 		{with("-ledger-date-layout", "2006-01-02 MST"), "uses a zone abbreviation", exitUsage},
 		{with("-bank-date-layout", "Jan _2 15:04:05 MST 2006"), "uses a zone abbreviation", exitUsage},
 		{[]string{"-bank", bank, "-ledger", ledger, "-out", ""}, `-out must be a file path or "-"`, exitUsage},
+		{with("-state", ""), "-state must be a file path", exitUsage},
 	} {
-		if code, stdout, stderr := runCLI(tt.args...); code != tt.code || stdout != "" || !strings.Contains(stderr, tt.msg) {
+		if code, stdout, stderr := runCLI(t, tt.args...); code != tt.code || stdout != "" || !strings.Contains(stderr, tt.msg) {
 			t.Errorf("%v: exit %d, stdout %q, stderr:\n%s\nwant exit %d explaining %q", tt.args, code, stdout, stderr, tt.code, tt.msg)
 		}
 	}
