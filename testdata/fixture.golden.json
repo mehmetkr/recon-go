@@ -1,0 +1,227 @@
+{
+  "run_id": "22114d0c3cbb39d0",
+  "config": {
+    "algo_version": 1,
+    "tz": "UTC",
+    "bank_layouts": [
+      "2006-01-02",
+      "2006-01-02T15:04:05Z07:00"
+    ],
+    "ledger_layouts": [
+      "2006-01-02",
+      "2006-01-02T15:04:05Z07:00"
+    ],
+    "date_tolerance": 3,
+    "fuzzy_window": 7,
+    "min_ref_len": 5,
+    "threshold_num": 4,
+    "threshold_den": 5,
+    "config_hash": "738cefda98ae8667fda8af261ec04de24549d46ededfd062d4d4d790e4748896"
+  },
+  "summary": {
+    "read": {
+      "bank": 12,
+      "ledger": 9
+    },
+    "matches": {
+      "date_tolerance": 1,
+      "exact": 4,
+      "fuzzy_reference": 1
+    },
+    "exceptions": {
+      "bank": {
+        "ambiguous": 2,
+        "counterpart_taken": 0,
+        "no_amount_match": 3,
+        "no_rule_match": 1
+      },
+      "ledger": {
+        "ambiguous": 1,
+        "counterpart_taken": 0,
+        "no_amount_match": 1,
+        "no_rule_match": 1
+      }
+    },
+    "malformed": {
+      "bank": 4,
+      "ledger": 1
+    },
+    "excluded": {
+      "bank": 0,
+      "ledger": 0
+    }
+  },
+  "matches": [
+    {
+      "match_id": "1dcc7314e319df4f0732ec91ccfd7b3f",
+      "bank_id": "42e953ff0cfe92feb561efa49956593d",
+      "ledger_id": "082bbbe53334314a3291df2b3bb7e862",
+      "rule": "exact",
+      "day_delta": 0
+    },
+    {
+      "match_id": "d76f9842c0512f27a5039393a26201d3",
+      "bank_id": "742f239fcd70e066a1708793ca1c49a0",
+      "ledger_id": "48f8ce81e768cf3328c7a52bf902d4fb",
+      "rule": "exact",
+      "day_delta": 0
+    },
+    {
+      "match_id": "aaec230e3325fd938abd1060fde03863",
+      "bank_id": "7f852ac3d312a888e6e6ee96b8015f0f",
+      "ledger_id": "ed634b020fccf1716906ac8d9419536f",
+      "rule": "date_tolerance",
+      "day_delta": -2
+    },
+    {
+      "match_id": "31be92368ed37f5b0b0577b32abff3d6",
+      "bank_id": "d35d80327bde5c418e56b3f7f773d58f",
+      "ledger_id": "ec7f7c9a137df1c313e975e3f2ddfd55",
+      "rule": "exact",
+      "day_delta": 0
+    },
+    {
+      "match_id": "cc88b4683bb1f858c9e1e154733608da",
+      "bank_id": "e7964e1be703bc52215d5f782a2e854e",
+      "ledger_id": "dc6381d5e5284635af415df2508f2fcf",
+      "rule": "exact",
+      "day_delta": 0
+    },
+    {
+      "match_id": "37e4e6acca12985453e1ba35b9e9363c",
+      "bank_id": "fdcd78169f9ccf9488c3bb63aa509e49",
+      "ledger_id": "357164ac5829a4275d9175c130d60382",
+      "rule": "fuzzy_reference",
+      "day_delta": 4
+    }
+  ],
+  "exceptions": [
+    {
+      "source": "bank",
+      "id": "8d15c90867acf16ec809b5d3ef66d050",
+      "reason": "no_rule_match",
+      "candidates": []
+    },
+    {
+      "source": "bank",
+      "id": "ac144e9b8753674447be950f5afa8d15",
+      "reason": "no_amount_match",
+      "candidates": []
+    },
+    {
+      "source": "bank",
+      "id": "ba51a57c7e65756cc670842902ac2722",
+      "reason": "ambiguous",
+      "candidates": [
+        "02d808719bf131b53f7ee7283bc69344"
+      ]
+    },
+    {
+      "source": "bank",
+      "id": "e3653fbc8e1eb5e8c7b67c2f2adc715f",
+      "reason": "no_amount_match",
+      "candidates": []
+    },
+    {
+      "source": "bank",
+      "id": "f06bde38c69dc22af6c2f14e09c24a77",
+      "reason": "ambiguous",
+      "candidates": [
+        "02d808719bf131b53f7ee7283bc69344"
+      ]
+    },
+    {
+      "source": "bank",
+      "id": "fd6a96ae4f7d6bb56892baf446eb477d",
+      "reason": "no_amount_match",
+      "candidates": []
+    },
+    {
+      "source": "ledger",
+      "id": "02d808719bf131b53f7ee7283bc69344",
+      "reason": "ambiguous",
+      "candidates": [
+        "ba51a57c7e65756cc670842902ac2722",
+        "f06bde38c69dc22af6c2f14e09c24a77"
+      ]
+    },
+    {
+      "source": "ledger",
+      "id": "c85b95abf9bd6e036d3499bd6d07980d",
+      "reason": "no_rule_match",
+      "candidates": []
+    },
+    {
+      "source": "ledger",
+      "id": "f5d2b458feec8a36ecf5422de197ab6a",
+      "reason": "no_amount_match",
+      "candidates": []
+    }
+  ],
+  "malformed": [
+    {
+      "source": "bank",
+      "line": 15,
+      "reason": "csv_parse",
+      "detail": "bare \" in non-quoted-field",
+      "raw": [
+        "ACC-1",
+        "2026-09-01"
+      ]
+    },
+    {
+      "source": "bank",
+      "line": 14,
+      "reason": "field_count",
+      "detail": "expected 5 fields, got 2",
+      "raw": [
+        "ACC-1",
+        "2026-09-01"
+      ]
+    },
+    {
+      "source": "bank",
+      "line": 17,
+      "reason": "bad_amount",
+      "detail": "invalid amount \"1.2.3\"",
+      "raw": [
+        "ACC-1",
+        "2026-09-01",
+        "1.2.3",
+        "EUR",
+        "BADAMT"
+      ]
+    },
+    {
+      "source": "bank",
+      "line": 16,
+      "reason": "bad_currency",
+      "detail": "unsupported currency \"EURO\"",
+      "raw": [
+        "ACC-1",
+        "2026-09-01",
+        "10.00",
+        "EURO",
+        "BADCUR"
+      ]
+    },
+    {
+      "source": "ledger",
+      "line": 11,
+      "reason": "bad_amount",
+      "detail": "both debit and credit are set",
+      "raw": [
+        "ACC-1",
+        "2026-09-05",
+        "10.00",
+        "5.00",
+        "EUR",
+        "both sides"
+      ]
+    }
+  ],
+  "excluded": {
+    "bank": 0,
+    "ledger": 0
+  }
+}

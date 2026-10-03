@@ -24,7 +24,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	testBinary = exe
-	if testdataDir, err = filepath.Abs("testdata"); err != nil {
+	if testdataDir, err = filepath.Abs("../../testdata"); err != nil {
 		panic(err)
 	}
 	dir, err := os.MkdirTemp("", "recon-cli-test-")

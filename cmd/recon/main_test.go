@@ -73,18 +73,31 @@ type results struct {
 	RunID   string         `json:"run_id"`
 	Config  map[string]any `json:"config"`
 	Matches []struct {
+		MatchID  string `json:"match_id"`
 		BankID   string `json:"bank_id"`
 		LedgerID string `json:"ledger_id"`
 		Rule     string `json:"rule"`
+		DayDelta int    `json:"day_delta"`
 	} `json:"matches"`
 	Exceptions []struct {
 		Source     string   `json:"source"`
+		ID         string   `json:"id"`
 		Reason     string   `json:"reason"`
 		Candidates []string `json:"candidates"`
 	} `json:"exceptions"`
+	Malformed []struct {
+		Source string   `json:"source"`
+		Line   int      `json:"line"`
+		Reason string   `json:"reason"`
+		Detail string   `json:"detail"`
+		Raw    []string `json:"raw"`
+	} `json:"malformed"`
 	Summary struct {
-		Read     map[string]int `json:"read"`
-		Excluded map[string]int `json:"excluded"`
+		Read       map[string]int            `json:"read"`
+		Matches    map[string]int            `json:"matches"`
+		Exceptions map[string]map[string]int `json:"exceptions"`
+		Malformed  map[string]int            `json:"malformed"`
+		Excluded   map[string]int            `json:"excluded"`
 	} `json:"summary"`
 }
 
@@ -93,6 +106,19 @@ func reportOf(t *testing.T, args ...string) results {
 	t.Helper()
 	r, _ := step(t, filepath.Join(t.TempDir(), "state.json"), args...)
 	return r
+}
+
+// goldenFixtures returns paths to the comprehensive fixture pair.
+func goldenFixtures(t *testing.T) (bank, ledger string) {
+	t.Helper()
+	bank = filepath.Join(testdataDir, "bank.csv")
+	ledger = filepath.Join(testdataDir, "ledger.csv")
+	for _, f := range []string{bank, ledger} {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bank, ledger
 }
 
 // golden returns the reviewed report for the fixture.
@@ -107,7 +133,8 @@ func golden(t *testing.T) string {
 
 // TestOutput compares the full report with a reviewed copy (refresh with -update).
 func TestOutput(t *testing.T) {
-	dir, bank, ledger := fixture(t, bankCSV, ledgerCSV)
+	bank, ledger := goldenFixtures(t)
+	dir := t.TempDir()
 	t.Chdir(dir)
 	if *update {
 		_, stdout, _ := runCLI(t, "-bank", bank, "-ledger", ledger, "-out", "-")
@@ -150,7 +177,10 @@ func TestOutput(t *testing.T) {
 			}
 			var r results
 			json.Unmarshal([]byte(got), &r)
-			for _, field := range []string{"msg=reconciled", "run_id=" + r.RunID, "bank=4", "ledger=3", "matched=2", "exceptions=3", "malformed=2"} {
+			for _, field := range []string{
+				"msg=reconciled", "run_id=" + r.RunID,
+				"bank=12", "ledger=9", "matched=6", "exceptions=9", "malformed=5",
+			} {
 				if !strings.Contains(stderr, field) {
 					t.Errorf("the summary line lacks %q:\n%s", field, stderr)
 				}
@@ -161,7 +191,7 @@ func TestOutput(t *testing.T) {
 
 // TestRealMainWritesReportToStdout runs the real command and checks where output goes.
 func TestRealMainWritesReportToStdout(t *testing.T) {
-	_, bank, ledger := fixture(t, bankCSV, ledgerCSV)
+	bank, ledger := goldenFixtures(t)
 	cmd := exec.Command(testBinary, withState(t, []string{"-bank", bank, "-ledger", ledger, "-out", "-"})...)
 	cmd.Env = append(os.Environ(), "RECON_TEST_RUN_MAIN=1")
 	var stdout, stderr bytes.Buffer
@@ -175,6 +205,70 @@ func TestRealMainWritesReportToStdout(t *testing.T) {
 	if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "msg=reconciled") {
 		t.Errorf("standard error should hold only the summary line:\n%s", stderr.String())
 	}
+}
+
+// TestShuffleDeterminism reorders both input files and checks the result is identical.
+func TestShuffleDeterminism(t *testing.T) {
+	bank, ledger := goldenFixtures(t)
+	bankLines := dataLines(t, bank)
+	ledgerLines := dataLines(t, ledger)
+	want := golden(t)
+	var ref results
+	json.Unmarshal([]byte(want), &ref)
+
+	wantCanon := canonicalReport(ref)
+	for i := range 50 {
+		sb, sl := shuffled(t, bankLines, bankHeader, i), shuffled(t, ledgerLines, ledgerHeader, i+1000)
+		r, _ := step(t, filepath.Join(t.TempDir(), "state.json"), "-bank", sb, "-ledger", sl)
+		if diff := cmp.Diff(wantCanon, canonicalReport(r)); diff != "" {
+			t.Fatalf("permutation %d differs (-want +got):\n%s", i, diff)
+		}
+	}
+}
+
+// dataLines reads a CSV file and returns only the data lines (no header).
+func dataLines(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("%s has no data lines", path)
+	}
+	return lines[1:]
+}
+
+// shuffled writes a CSV with the header first and data lines in a seeded permutation.
+func shuffled(t *testing.T, lines []string, header string, seed int) string {
+	t.Helper()
+	perm := make([]string, len(lines))
+	copy(perm, lines)
+	for i := len(perm) - 1; i > 0; i-- {
+		j := (seed*31 + i*17) % (i + 1)
+		if j < 0 {
+			j += i + 1
+		}
+		perm[i], perm[j] = perm[j], perm[i]
+	}
+	path := filepath.Join(t.TempDir(), "shuffled.csv")
+	if err := os.WriteFile(path, []byte(header+strings.Join(perm, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// canonicalReport zeroes fields that change when inputs are shuffled.
+func canonicalReport(r results) results {
+	c := r
+	c.RunID = ""
+	c.Config = nil
+	c.Malformed = slices.Clone(c.Malformed)
+	for i := range c.Malformed {
+		c.Malformed[i].Line = 0
+	}
+	return c
 }
 
 func TestFlagsReachTheEngine(t *testing.T) {

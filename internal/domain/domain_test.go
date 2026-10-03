@@ -51,6 +51,9 @@ func TestDateJSON(t *testing.T) {
 	if json.Unmarshal([]byte(`"2026-02-30"`), &back) == nil {
 		t.Error("an invalid date was accepted")
 	}
+	if json.Unmarshal([]byte(`123`), &back) == nil {
+		t.Error("a non-string JSON value was accepted")
+	}
 }
 
 func TestJSONShapes(t *testing.T) {

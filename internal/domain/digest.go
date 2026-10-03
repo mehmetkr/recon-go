@@ -14,7 +14,8 @@ func Digest(n int, fields ...string) string {
 		h.Write([]byte{':'})
 		h.Write([]byte(f))
 	}
-	return hex.EncodeToString(h.Sum(nil))[:n]
+	s := hex.EncodeToString(h.Sum(nil))
+	return s[:min(n, len(s))]
 }
 
 // MatchID gives each bank and ledger pairing a lasting identity.

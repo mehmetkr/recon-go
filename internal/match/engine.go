@@ -349,6 +349,9 @@ func endpoints(comp []pair) (banks, ledgers []*domain.Transaction) {
 }
 
 func contentIdentical(ts []*domain.Transaction) bool {
+	if len(ts) <= 1 {
+		return true
+	}
 	for _, t := range ts[1:] {
 		if t.ContentKey() != ts[0].ContentKey() {
 			return false
