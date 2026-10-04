@@ -12,6 +12,23 @@ import (
 	"github.com/mehmetkr/recon-go/internal/domain"
 )
 
+// Store loads and saves reconciliation state.
+type Store interface {
+	Load(path string) (*State, error)
+	Save(ctx context.Context, state *State, path string) error
+}
+
+// FileStore implements Store with JSON files.
+type FileStore struct{}
+
+// Load reads the state file; a missing file is an empty state.
+func (FileStore) Load(path string) (*State, error) { return Load(path) }
+
+// Save writes the state file all at once.
+func (FileStore) Save(ctx context.Context, state *State, path string) error {
+	return state.Save(ctx, path)
+}
+
 // The versions of the state format and of the record identity scheme.
 const (
 	stateVersion = 1

@@ -23,7 +23,13 @@ import (
 // step runs the command against a shared state file and reads back the report.
 func step(t *testing.T, state string, args ...string) (r results, stderr string) {
 	t.Helper()
-	code, stdout, stderr := runCLI(t, append(args, "-state", state, "-out", "-")...)
+	return stepWith(t, match.Run, state, args...)
+}
+
+// stepWith is step with a custom matcher.
+func stepWith(t *testing.T, matcher matchFunc, state string, args ...string) (r results, stderr string) {
+	t.Helper()
+	code, stdout, stderr := runCLIWith(t, matcher, append(args, "-state", state, "-out", "-")...)
 	if code != exitOK {
 		t.Fatalf("%v: exit %d:\n%s", args, code, stderr)
 	}
@@ -238,7 +244,7 @@ func TestInterruptBetweenWrites(t *testing.T) {
 	out, state := filepath.Join(dir, "results.json"), filepath.Join(dir, "state.json")
 	var stderr bytes.Buffer
 	ctx := cancelledOnceExists{context.Background(), out}
-	code := run(ctx, []string{"-bank", bank, "-ledger", ledger, "-out", out, "-state", state}, io.Discard, &stderr)
+	code := run(ctx, []string{"-bank", bank, "-ledger", ledger, "-out", out, "-state", state}, match.Run, io.Discard, &stderr)
 	if code != exitFatal || !strings.Contains(stderr.String(), "context canceled") {
 		t.Errorf("exit %d, want %d:\n%s", code, exitFatal, stderr.String())
 	}
@@ -252,11 +258,10 @@ func TestInterruptBetweenWrites(t *testing.T) {
 func TestRefusedCommitWritesNothing(t *testing.T) {
 	dir, bank, ledger := fixture(t, bankCSV, ledgerCSV)
 	// A faulty matcher pairs one bank record twice.
-	runMatch = func(context.Context, []domain.Transaction, []domain.Transaction, []domain.Transaction, match.Params, int) (match.Result, error) {
+	broken := func(context.Context, []domain.Transaction, []domain.Transaction, []domain.Transaction, match.Params, int) (match.Result, error) {
 		return match.Result{Matches: []domain.Match{{MatchID: "m1", BankID: "b", LedgerID: "l1"}, {MatchID: "m2", BankID: "b", LedgerID: "l2"}}}, nil
 	}
-	t.Cleanup(func() { runMatch = match.Run })
-	code, _, stderr := runCLI(t, "-bank", bank, "-ledger", ledger, "-out", filepath.Join(dir, "results.json"), "-state", filepath.Join(dir, "state.json"))
+	code, _, stderr := runCLIWith(t, broken, "-bank", bank, "-ledger", ledger, "-out", filepath.Join(dir, "results.json"), "-state", filepath.Join(dir, "state.json"))
 	if code != exitFatal || !strings.Contains(stderr, "matched twice") {
 		t.Errorf("exit %d, want %d refusing the commit:\n%s", code, exitFatal, stderr)
 	}
@@ -268,7 +273,7 @@ func TestStateDefaultsToStateJSON(t *testing.T) {
 	t.Chdir(dir)
 	var stderr bytes.Buffer
 	args := []string{"-bank", bank, "-ledger", ledger, "-out", "-", "-bank-date-layout", "2006-01-02"}
-	if code := run(context.Background(), args, io.Discard, &stderr); code != exitOK {
+	if code := run(context.Background(), args, match.Run, io.Discard, &stderr); code != exitOK {
 		t.Fatalf("exit %d:\n%s", code, stderr.String())
 	}
 	// The run lands in the default file, with each side's date formats kept apart.

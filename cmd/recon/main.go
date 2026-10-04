@@ -22,8 +22,8 @@ import (
 	"github.com/mehmetkr/recon-go/internal/store"
 )
 
-// runMatch is the matcher, replaceable in tests.
-var runMatch = match.Run
+// matchFunc is the signature of the concurrent matcher.
+type matchFunc func(ctx context.Context, bank, ledger, taken []domain.Transaction, p match.Params, workers int) (match.Result, error)
 
 // Exit codes.
 const (
@@ -33,7 +33,7 @@ const (
 )
 
 func main() {
-	os.Exit(run(interruptContext(), os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(interruptContext(), os.Args[1:], match.Run, os.Stdout, os.Stderr))
 }
 
 // interruptContext stops the run on the first Ctrl-C and quits at once on the second.
@@ -154,7 +154,7 @@ func setAside(records []domain.Transaction, matched map[string]bool) (free, take
 	return free, taken
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, matcher matchFunc, stdout, stderr io.Writer) int {
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 
 	o, err := parseFlags(args, stderr)
@@ -179,7 +179,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if err := reconcile(ctx, o, bankCfg, ledgerCfg, stdout, log); err != nil {
+	if err := reconcile(ctx, o, bankCfg, ledgerCfg, matcher, stdout, log); err != nil {
 		log.Error("run failed", "err", err)
 		return exitFatal
 	}
@@ -215,7 +215,7 @@ func readUTF8(path string) ([]byte, error) {
 	return b, nil
 }
 
-func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config, stdout io.Writer, log *slog.Logger) error {
+func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config, matcher matchFunc, stdout io.Writer, log *slog.Logger) error {
 	state, err := store.Load(o.statePath)
 	if err != nil {
 		return err
@@ -264,7 +264,7 @@ func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config,
 	freeBank, takenBank := setAside(bank, matchedBank)
 	freeLedger, takenLedger := setAside(ledger, matchedLedger)
 
-	res, err := runMatch(ctx, freeBank, freeLedger, append(takenBank, takenLedger...), o.params, o.workers)
+	res, err := matcher(ctx, freeBank, freeLedger, append(takenBank, takenLedger...), o.params, o.workers)
 	if err != nil {
 		return err
 	}

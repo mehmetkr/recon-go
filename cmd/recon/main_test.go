@@ -64,8 +64,12 @@ func withState(t *testing.T, args []string) []string {
 }
 
 func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
+	return runCLIWith(t, match.Run, args...)
+}
+
+func runCLIWith(t *testing.T, matcher matchFunc, args ...string) (code int, stdout, stderr string) {
 	var out, errOut bytes.Buffer
-	code = run(context.Background(), withState(t, args), &out, &errOut)
+	code = run(context.Background(), withState(t, args), matcher, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 
@@ -105,6 +109,13 @@ type results struct {
 func reportOf(t *testing.T, args ...string) results {
 	t.Helper()
 	r, _ := step(t, filepath.Join(t.TempDir(), "state.json"), args...)
+	return r
+}
+
+// reportOfWith is reportOf with a custom matcher.
+func reportOfWith(t *testing.T, matcher matchFunc, args ...string) results {
+	t.Helper()
+	r, _ := stepWith(t, matcher, filepath.Join(t.TempDir(), "state.json"), args...)
 	return r
 }
 
@@ -348,17 +359,15 @@ func TestRunIDInputs(t *testing.T) {
 func TestWorkersFlagReachesTheRunner(t *testing.T) {
 	_, bank, ledger := fixture(t, bankCSV, ledgerCSV)
 	var got []int
-	runMatch = func(ctx context.Context, b, l, tk []domain.Transaction, p match.Params, workers int) (match.Result, error) {
+	spy := func(ctx context.Context, b, l, tk []domain.Transaction, p match.Params, workers int) (match.Result, error) {
 		got = append(got, workers)
 		return match.Run(ctx, b, l, tk, p, workers)
 	}
-	t.Cleanup(func() { runMatch = match.Run })
-	reportOf(t, "-bank", bank, "-ledger", ledger, "-workers", "1")
-	reportOf(t, "-bank", bank, "-ledger", ledger, "-workers", "5")
-	// A processor count that differs from the core count tells the two apart.
+	reportOfWith(t, spy, "-bank", bank, "-ledger", ledger, "-workers", "1")
+	reportOfWith(t, spy, "-bank", bank, "-ledger", ledger, "-workers", "5")
 	procs := runtime.NumCPU() + 1
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
-	reportOf(t, "-bank", bank, "-ledger", ledger)
+	reportOfWith(t, spy, "-bank", bank, "-ledger", ledger)
 	if want := []int{1, 5, procs}; !slices.Equal(got, want) {
 		t.Errorf("the runner saw workers %v, want %v", got, want)
 	}
@@ -471,9 +480,8 @@ func TestInterruptedRunIsFatal(t *testing.T) {
 			if !afterMatching {
 				cancel()
 			}
-			runMatch = func(rctx context.Context, b, l, tk []domain.Transaction, p match.Params, w int) (match.Result, error) {
+			interrupter := func(rctx context.Context, b, l, tk []domain.Transaction, p match.Params, w int) (match.Result, error) {
 				res, err := match.Run(rctx, b, l, tk, p, w)
-				// Ctrl-C arrives after matching, through the command's own context.
 				cancel()
 				if rctx.Err() == nil {
 					t.Error("the runner did not receive the command's context")
@@ -481,8 +489,7 @@ func TestInterruptedRunIsFatal(t *testing.T) {
 				return res, err
 			}
 			var stdout, stderr bytes.Buffer
-			code := run(ctx, withState(t, []string{"-bank", bank, "-ledger", ledger, "-out", out}), &stdout, &stderr)
-			runMatch = match.Run
+			code := run(ctx, withState(t, []string{"-bank", bank, "-ledger", ledger, "-out", out}), interrupter, &stdout, &stderr)
 			cancel()
 			if _, err := os.Stat(filepath.Join(dir, "results.json")); code != exitFatal || stdout.Len() != 0 || !os.IsNotExist(err) {
 				t.Errorf("-out %s (after matching: %v): exit %d; want exit %d and nothing written", out, afterMatching, code, exitFatal)
@@ -525,7 +532,7 @@ func TestFatalErrors(t *testing.T) {
 		if tt.stdout != nil {
 			w = tt.stdout
 		}
-		code := run(context.Background(), withState(t, []string{"-bank", tt.bank, "-ledger", tt.ledger, "-out", tt.out}), w, &stderr)
+		code := run(context.Background(), withState(t, []string{"-bank", tt.bank, "-ledger", tt.ledger, "-out", tt.out}), match.Run, w, &stderr)
 		if _, err := os.Stat(out); code != exitFatal || stdout.Len() != 0 || !os.IsNotExist(err) ||
 			!strings.Contains(stderr.String(), "level=ERROR") || !strings.Contains(stderr.String(), tt.want) {
 			t.Errorf("want exit %d naming %q and nothing written; got exit %d:\n%s", exitFatal, tt.want, code, stderr.String())

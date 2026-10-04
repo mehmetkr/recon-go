@@ -126,6 +126,8 @@ Persistence is a JSON file (`state.json`) written atomically. The alternative (P
 - **Non-ASCII references are dropped.** Reference normalization keeps only ASCII letters and digits. Characters like `ü` or `é` are removed rather than folded.
 - **Sequential references count as strong.** `INV1001` vs `INV1002` has edit distance 1, which passes the threshold. Only amount and date prevent a false match.
 - **Conservative ambiguity marking.** A group where only one side has content-identical records is marked ambiguous, even when every possible assignment would pair the same records.
+- **Hardcoded currency allowlist.** Only EUR, GBP and USD are accepted. Supporting additional currencies would require handling variable sub-unit precision (e.g. JPY has no cents, BHD has three decimal places), since amounts are stored as int64 with a fixed two-decimal assumption.
+- **Quadratic matching within large partitions.** Records sharing the same (account, currency, amount) key are matched pairwise. Partitions with thousands of records (common with round amounts like 100.00) scale as O(n^2).
 
 ## Towards a database store
 
@@ -158,4 +160,3 @@ One transaction per run. `ON CONFLICT DO NOTHING` on `matches` gives the same sk
 - Business-day calendars
 - PostgreSQL store for concurrent access
 - HTTP endpoint for integration
-- CI pipeline
