@@ -7,15 +7,18 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/mehmetkr/recon-go/internal/domain"
 )
 
-// Store loads and saves reconciliation state.
+// Store loads and saves reconciliation state and reports.
 type Store interface {
 	LoadState(ctx context.Context) (*State, error)
 	SaveState(ctx context.Context, state *State) error
+	SaveReport(ctx context.Context, runID string, data []byte) error
+	GetReport(ctx context.Context, runID string) ([]byte, error)
 }
 
 // FileStore implements Store with JSON files on disk.
@@ -31,6 +34,48 @@ func (f FileStore) LoadState(_ context.Context) (*State, error) { return Load(f.
 // SaveState writes the state file all at once.
 func (f FileStore) SaveState(ctx context.Context, state *State) error {
 	return state.Save(ctx, f.Path)
+}
+
+func reportPath(stateDir, runID string) (string, error) {
+	if filepath.Base(runID) != runID || runID == "." || runID == ".." {
+		return "", fmt.Errorf("%w: invalid run ID %q", domain.ErrNotFound, runID)
+	}
+	return filepath.Join(stateDir, runID+".json"), nil
+}
+
+// SaveReport writes the report JSON next to the state file as {runID}.json.
+func (f FileStore) SaveReport(ctx context.Context, runID string, data []byte) error {
+	state, err := Load(f.Path)
+	if err != nil {
+		return err
+	}
+	if !state.HasRun(runID) {
+		return fmt.Errorf("%w: run %s", domain.ErrNotFound, runID)
+	}
+	path, err := reportPath(filepath.Dir(f.Path), runID)
+	if err != nil {
+		return err
+	}
+	if err := WriteAtomic(ctx, path, data); err != nil {
+		return fmt.Errorf("saving report %s: %w", runID, err)
+	}
+	return nil
+}
+
+// GetReport reads a previously saved report by run ID.
+func (f FileStore) GetReport(_ context.Context, runID string) ([]byte, error) {
+	path, err := reportPath(filepath.Dir(f.Path), runID)
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w: report %s", domain.ErrNotFound, runID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading report %s: %w", runID, err)
+	}
+	return b, nil
 }
 
 // The versions of the state format and of the record identity scheme.

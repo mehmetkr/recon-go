@@ -4,6 +4,8 @@ package postgres_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -166,4 +168,64 @@ func TestPgStoreMultipleRuns(t *testing.T) {
 	if !bank["b1"] || !bank["b2"] || !ledger["l1"] || !ledger["l2"] {
 		t.Errorf("MatchedIDs missing entries: bank=%v ledger=%v", bank, ledger)
 	}
+}
+
+func TestPgStoreReport(t *testing.T) {
+	pool := setupPg(t)
+	ctx := context.Background()
+	st := postgres.New(pool)
+
+	// GetReport on a nonexistent run returns ErrNotFound.
+	_, err := st.GetReport(ctx, "no-such-run")
+	if err == nil || !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("GetReport missing run: %v, want ErrNotFound", err)
+	}
+
+	// Create a run so we can attach a report.
+	state, _ := st.LoadState(ctx)
+	state.Lock("UTC", []string{"2006-01-02"}, []string{"2006-01-02"})
+	state.AddRun(store.Run{RunID: "r1", BankSHA: "a", LedgerSHA: "b", ConfigHash: "c"},
+		[]domain.Match{{MatchID: "m1", BankID: "b1", LedgerID: "l1", Rule: domain.RuleExact}})
+	if err := st.SaveState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+
+	// GetReport on a run with no report returns ErrNotFound.
+	_, err = st.GetReport(ctx, "r1")
+	if err == nil || !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("GetReport no report: %v, want ErrNotFound", err)
+	}
+
+	// SaveReport + GetReport round-trip.
+	data := []byte(`{"run_id":"r1","matches":[]}`)
+	if err := st.SaveReport(ctx, "r1", data); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetReport(ctx, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !jsonEqual(t, got, data) {
+		t.Errorf("got %s, want %s", got, data)
+	}
+
+	// SaveReport on nonexistent run returns ErrNotFound.
+	err = st.SaveReport(ctx, "no-such-run", data)
+	if err == nil || !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("SaveReport missing run: %v, want ErrNotFound", err)
+	}
+}
+
+func jsonEqual(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var va, vb any
+	if err := json.Unmarshal(a, &va); err != nil {
+		t.Fatalf("unmarshal a: %v", err)
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		t.Fatalf("unmarshal b: %v", err)
+	}
+	ea, _ := json.Marshal(va)
+	eb, _ := json.Marshal(vb)
+	return string(ea) == string(eb)
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/mehmetkr/recon-go/internal/domain"
 	"github.com/mehmetkr/recon-go/internal/store"
 )
 
@@ -143,4 +144,36 @@ func (s *PgStore) SaveState(ctx context.Context, state *store.State) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// SaveReport stores report JSON alongside the run that produced it.
+func (s *PgStore) SaveReport(ctx context.Context, runID string, data []byte) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE runs SET report_data = $1 WHERE run_id = $2`,
+		data, runID)
+	if err != nil {
+		return fmt.Errorf("saving report %s: %w", runID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: run %s", domain.ErrNotFound, runID)
+	}
+	return nil
+}
+
+// GetReport retrieves a previously stored report by run ID.
+func (s *PgStore) GetReport(ctx context.Context, runID string) ([]byte, error) {
+	var data []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT report_data FROM runs WHERE run_id = $1`, runID,
+	).Scan(&data)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("%w: run %s", domain.ErrNotFound, runID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading report %s: %w", runID, err)
+	}
+	if data == nil {
+		return nil, fmt.Errorf("%w: report %s", domain.ErrNotFound, runID)
+	}
+	return data, nil
 }

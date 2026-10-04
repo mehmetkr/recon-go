@@ -139,6 +139,64 @@ func TestLock(t *testing.T) {
 	}
 }
 
+func TestFileStoreReport(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	fs := FileStore{Path: statePath}
+	ctx := context.Background()
+
+	// GetReport on a missing report returns ErrNotFound.
+	_, err := fs.GetReport(ctx, "no-such-run")
+	if err == nil || !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("GetReport missing: %v, want ErrNotFound", err)
+	}
+
+	// SaveReport on a nonexistent run returns ErrNotFound.
+	if err := fs.SaveReport(ctx, "no-such-run", []byte("{}")); err == nil || !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("SaveReport nonexistent run: %v, want ErrNotFound", err)
+	}
+
+	// Create state with a run so SaveReport can succeed.
+	state, _ := Load(statePath)
+	state.Lock("UTC", []string{"2006-01-02"}, []string{"2006-01-02"})
+	state.AddRun(Run{RunID: "r1", BankSHA: "a", LedgerSHA: "b", ConfigHash: "c"},
+		[]domain.Match{match("b1", "l1")})
+	state.Save(ctx, statePath)
+
+	// SaveReport + GetReport round-trip.
+	data := []byte(`{"run_id":"r1","matches":[]}`)
+	if err := fs.SaveReport(ctx, "r1", data); err != nil {
+		t.Fatal(err)
+	}
+	got, err := fs.GetReport(ctx, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(data) {
+		t.Errorf("got %s, want %s", got, data)
+	}
+
+	// Overwriting a report replaces it.
+	data2 := []byte(`{"run_id":"r1","matches":[{"match_id":"m1"}]}`)
+	if err := fs.SaveReport(ctx, "r1", data2); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = fs.GetReport(ctx, "r1")
+	if string(got) != string(data2) {
+		t.Errorf("overwrite: got %s, want %s", got, data2)
+	}
+
+	// Path traversal is rejected.
+	for _, bad := range []string{"../etc/evil", "foo/bar", "..", "."} {
+		if err := fs.SaveReport(ctx, bad, []byte("{}")); err == nil || !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("SaveReport(%q) = %v, want ErrNotFound", bad, err)
+		}
+		if _, err := fs.GetReport(ctx, bad); err == nil || !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("GetReport(%q) = %v, want ErrNotFound", bad, err)
+		}
+	}
+}
+
 func TestAddRun(t *testing.T) {
 	s, _ := Load(filepath.Join(t.TempDir(), "state.json"))
 	if err := s.AddRun(Run{RunID: "r1"}, []domain.Match{match("b1", "l1"), match("b2", "l2")}); err != nil {
