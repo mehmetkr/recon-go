@@ -31,14 +31,17 @@ func (d Date) Time() time.Time {
 	return time.Unix(int64(d)*86400, 0).UTC()
 }
 
+// String formats the date as YYYY-MM-DD.
 func (d Date) String() string {
 	return d.Time().Format(isoDate)
 }
 
+// MarshalJSON writes the date as a quoted YYYY-MM-DD string.
 func (d Date) MarshalJSON() ([]byte, error) {
 	return json.Marshal(d.String())
 }
 
+// UnmarshalJSON reads a quoted YYYY-MM-DD string.
 func (d *Date) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {

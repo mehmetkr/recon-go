@@ -33,6 +33,7 @@ type ContentKey struct {
 	RefNorm  string
 }
 
+// ContentKey returns what a transaction says, independent of which file it came from.
 func (t Transaction) ContentKey() ContentKey {
 	return ContentKey{t.Account, t.Currency, t.Date, t.Amount, t.RefNorm}
 }
@@ -44,6 +45,7 @@ type PartitionKey struct {
 	Amount   int64
 }
 
+// PartitionKey returns the group this record belongs to for matching.
 func (t Transaction) PartitionKey() PartitionKey {
 	return PartitionKey{t.Account, t.Currency, t.Amount}
 }
