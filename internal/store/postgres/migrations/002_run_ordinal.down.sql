@@ -1,0 +1,3 @@
+ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_ordinal_unique;
+
+ALTER TABLE runs DROP COLUMN ordinal;
