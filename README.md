@@ -109,34 +109,71 @@ Reference similarity uses semi-global Levenshtein alignment: the shorter referen
 
 Persistence is a JSON file (`state.json`) written atomically. The alternative (PostgreSQL with row-level locking) would be needed for concurrent writers or a query interface, but the tool runs as a single CLI invocation. A file keeps the dependency footprint at zero and makes the state inspectable with any text editor.
 
-## Towards a database store
+## HTTP API
 
-For concurrent access or a query interface, the file store can be replaced with PostgreSQL:
+An HTTP server exposes the reconciliation engine over a REST API.
 
-```sql
-CREATE TABLE runs (
-    run_id      TEXT PRIMARY KEY,
-    bank_sha    TEXT NOT NULL,
-    ledger_sha  TEXT NOT NULL,
-    config_hash TEXT NOT NULL,
-    new_matches INTEGER NOT NULL,
-    created_at  TIMESTAMPTZ DEFAULT now()
-);
+### Setup
 
-CREATE TABLE matches (
-    match_id  TEXT PRIMARY KEY,
-    bank_id   TEXT NOT NULL UNIQUE,
-    ledger_id TEXT NOT NULL UNIQUE,
-    rule      TEXT NOT NULL,
-    run_id    TEXT NOT NULL REFERENCES runs(run_id)
-);
+```bash
+cp .env.example .env
+docker compose up -d
+make build
+bin/recon-server
 ```
 
-One transaction per run. `ON CONFLICT DO NOTHING` on `matches` gives the same skip-if-exists semantics as the file store. The `UNIQUE` constraints on `bank_id` and `ledger_id` enforce per-side uniqueness at the database level.
+The server reads configuration from environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | (required for postgres) | PostgreSQL connection string |
+| `PORT` | `8080` | Listen port |
+| `STORE_TYPE` | `postgres` | Store backend: `postgres` or `file` |
+| `STATE_PATH` | `state.json` | State file path (when `STORE_TYPE=file`) |
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+| `GET` | `/ready` | Readiness check (verifies store connectivity) |
+| `POST` | `/reconcile` | Run reconciliation (multipart form: `bank`, `ledger` files) |
+| `GET` | `/reconcile/{id}` | Retrieve a run's full report |
+| `GET` | `/reconcile/{id}/exceptions` | Retrieve only the exceptions for a run |
+
+### POST /reconcile
+
+Upload bank and ledger CSVs as multipart form files. Optional form fields: `tz`, `bank_date_layout`, `ledger_date_layout`, `date_tolerance`, `fuzzy_window`, `force`.
+
+```bash
+curl -X POST http://localhost:8080/reconcile \
+  -F bank=@exports/bank.csv \
+  -F ledger=@exports/ledger.csv
+```
+
+Returns `201 Created` with the full report JSON on success, `200 OK` if the inputs were already reconciled.
+
+## PostgreSQL store
+
+Both the CLI and the server support PostgreSQL as a store backend. Migrations run automatically on startup.
+
+The CLI can use postgres with:
+
+```bash
+recon-cli -store postgres -database-url "postgres://recon:recon@localhost:5432/recon?sslmode=disable" \
+  -bank exports/bank.csv -ledger exports/ledger.csv
+```
+
+## Development
+
+```bash
+make lint       # gofmt, go vet, staticcheck
+make test       # unit tests with race detector
+make test-int   # integration tests (requires Docker)
+make build      # build both binaries to bin/
+```
 
 ## Next steps
 
 - Many-to-one matching for fee-netted settlements
 - Business-day calendars
-- PostgreSQL store for concurrent access
-- HTTP endpoint for integration
