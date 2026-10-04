@@ -1,4 +1,4 @@
-// Command recon reconciles a bank statement against a ledger and writes results.json.
+// Command recon-cli reconciles a bank statement against a ledger and writes results.json.
 package main
 
 import (
@@ -45,7 +45,7 @@ func interruptContext() context.Context {
 	go func() {
 		<-ctx.Done()
 		stop()
-		fmt.Fprintln(os.Stderr, "recon: interrupted; stopping (press Ctrl-C again to abort)")
+		fmt.Fprintln(os.Stderr, "recon-cli: interrupted; stopping (press Ctrl-C again to abort)")
 	}()
 	return ctx
 }
@@ -70,7 +70,7 @@ type options struct {
 
 func parseFlags(args []string, stderr io.Writer) (options, error) {
 	var o options
-	fs := flag.NewFlagSet("recon", flag.ContinueOnError)
+	fs := flag.NewFlagSet("recon-cli", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&o.bankPath, "bank", "", "bank statement CSV (required)")
 	fs.StringVar(&o.ledgerPath, "ledger", "", "ledger export CSV (required)")
@@ -162,19 +162,19 @@ func run(ctx context.Context, args []string, matcher matchFunc, stdout, stderr i
 		return exitOK
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "recon:", err)
+		fmt.Fprintln(stderr, "recon-cli:", err)
 		return exitUsage
 	}
 	loc, err := ingest.LoadZone(o.tz)
 	if err != nil {
-		fmt.Fprintln(stderr, "recon:", err)
+		fmt.Fprintln(stderr, "recon-cli:", err)
 		return exitUsage
 	}
 	bankCfg := ingest.Config{Layouts: o.bankLayouts, Location: loc}
 	ledgerCfg := ingest.Config{Layouts: o.ledgerLayouts, Location: loc}
 	for _, c := range []ingest.Config{bankCfg, ledgerCfg} {
 		if err := c.Validate(); err != nil {
-			fmt.Fprintln(stderr, "recon:", err)
+			fmt.Fprintln(stderr, "recon-cli:", err)
 			return exitUsage
 		}
 	}

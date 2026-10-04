@@ -5,9 +5,9 @@ A bank-to-ledger reconciliation engine. It reads a bank statement CSV and a ledg
 ## Quick start
 
 ```bash
-go build -o recon ./cmd/recon
+go build -o recon-cli ./cmd/recon-cli
 
-./recon -bank exports/bank.csv -ledger exports/ledger.csv
+./recon-cli -bank exports/bank.csv -ledger exports/ledger.csv
 
 cat results.json
 ```
@@ -17,7 +17,7 @@ The report lands in `results.json` by default. Pass `-out -` to write it to stan
 ## Usage
 
 ```
-recon -bank FILE -ledger FILE [-state state.json] [-out results.json|-]
+recon-cli -bank FILE -ledger FILE [-state state.json] [-out results.json|-]
       [-tz UTC] [-bank-date-layout L]... [-ledger-date-layout L]...
       [-date-tolerance 3] [-fuzzy-window 7] [-workers GOMAXPROCS] [-force]
 ```
@@ -108,26 +108,6 @@ Reference similarity uses semi-global Levenshtein alignment: the shorter referen
 ### File store over a database
 
 Persistence is a JSON file (`state.json`) written atomically. The alternative (PostgreSQL with row-level locking) would be needed for concurrent writers or a query interface, but the tool runs as a single CLI invocation. A file keeps the dependency footprint at zero and makes the state inspectable with any text editor.
-
-## Known limitations
-
-- **Many-to-one matching and fee-netted settlement.** A payout net of fees has no single ledger counterpart at the same amount. It appears as `no_amount_match`.
-- **Calendar days, not business days.** Date tolerance counts calendar days. A Friday-to-Monday gap of 3 calendar days is 1 business day.
-- **Occurrence index per file.** Identical rows are distinguished by a 0-based occurrence index counted within each file. Moving a row between files can change its identity.
-- **IDs tied to settings.** Record IDs depend on the time zone, date layouts and normalization rules. These are locked per state file; changing them requires a new state file.
-- **Incremental runs can differ from a single run.** Matches are never revisited across runs. Running over three weekly exports incrementally can produce different pairings than running once over the union of all three.
-- **Boilerplate references count as strong evidence.** Containment of any 5+ character substring (even a common word like `TRANSFER`) is treated as the strongest similarity signal. Only the amount and date gates prevent false matches.
-- **Short-circuit leaves the report file as-is.** After a short-circuit (exit 0), the `-out` file may belong to a different run. Use `-force` to regenerate.
-- **Forced reruns share a run_id.** `-force` re-evaluates the inputs but produces the same `run_id`. Filtering matches by `run_id` returns both the original and forced results.
-- **Ambiguity is not re-evaluated.** The fast path does not re-check records that were ambiguous in an earlier run. Use `-force` to re-evaluate them.
-- **Absent counterparts are invisible.** A record committed in state but absent from the current input cannot explain a newcomer's `counterpart_taken` status.
-- **Single-writer file store.** Concurrent runs against the same state file are not safe.
-- **Unterminated CSV quotes consume following lines.** A missing closing quote swallows subsequent lines into one malformed record.
-- **Non-ASCII references are dropped.** Reference normalization keeps only ASCII letters and digits. Characters like `ü` or `é` are removed rather than folded.
-- **Sequential references count as strong.** `INV1001` vs `INV1002` has edit distance 1, which passes the threshold. Only amount and date prevent a false match.
-- **Conservative ambiguity marking.** A group where only one side has content-identical records is marked ambiguous, even when every possible assignment would pair the same records.
-- **Hardcoded currency allowlist.** Only EUR, GBP and USD are accepted. Supporting additional currencies would require handling variable sub-unit precision (e.g. JPY has no cents, BHD has three decimal places), since amounts are stored as int64 with a fixed two-decimal assumption.
-- **Quadratic matching within large partitions.** Records sharing the same (account, currency, amount) key are matched pairwise. Partitions with thousands of records (common with round amounts like 100.00) scale as O(n^2).
 
 ## Towards a database store
 

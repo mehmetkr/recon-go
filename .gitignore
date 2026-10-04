@@ -1,4 +1,5 @@
-/recon
+/recon-cli
+/recon-server
 /bin/
 *.test
 *.out
