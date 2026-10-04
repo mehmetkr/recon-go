@@ -15,11 +15,14 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/mehmetkr/recon-go/internal/domain"
 	"github.com/mehmetkr/recon-go/internal/ingest"
 	"github.com/mehmetkr/recon-go/internal/match"
 	"github.com/mehmetkr/recon-go/internal/recon"
 	"github.com/mehmetkr/recon-go/internal/store"
+	"github.com/mehmetkr/recon-go/internal/store/postgres"
 )
 
 // matchFunc is the CLI alias for the matcher signature.
@@ -61,6 +64,7 @@ func (l *layouts) Set(v string) error {
 
 type options struct {
 	bankPath, ledgerPath, outPath, statePath string
+	storeType, databaseURL                   string
 	force                                    bool
 	tz                                       string
 	bankLayouts, ledgerLayouts               layouts
@@ -76,6 +80,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.ledgerPath, "ledger", "", "ledger export CSV (required)")
 	fs.StringVar(&o.outPath, "out", "results.json", `report file, or "-" for stdout`)
 	fs.StringVar(&o.statePath, "state", "state.json", "file remembering earlier runs and their matches")
+	fs.StringVar(&o.storeType, "store", "file", `store backend: "file" or "postgres"`)
+	fs.StringVar(&o.databaseURL, "database-url", "", "PostgreSQL connection string (required when -store=postgres)")
 	fs.BoolVar(&o.force, "force", false, "reconcile again even if these inputs and settings were already reconciled")
 	fs.StringVar(&o.tz, "tz", "UTC", "IANA booking time zone")
 	fs.Var(&o.bankLayouts, "bank-date-layout", "Go date layout for the bank file (repeatable; replaces the defaults)")
@@ -95,11 +101,24 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	if o.outPath == "" {
 		return o, errors.New(`-out must be a file path or "-"`)
 	}
-	if o.statePath == "" {
-		return o, errors.New("-state must be a file path")
-	}
-	if err := checkPaths(o); err != nil {
-		return o, err
+	switch o.storeType {
+	case "file":
+		if o.statePath == "" {
+			return o, errors.New("-state must be a file path")
+		}
+		if err := checkPaths(o); err != nil {
+			return o, err
+		}
+	case "postgres":
+		if o.databaseURL == "" {
+			if v := os.Getenv("DATABASE_URL"); v != "" {
+				o.databaseURL = v
+			} else {
+				return o, errors.New("-database-url is required when -store=postgres")
+			}
+		}
+	default:
+		return o, fmt.Errorf("unknown -store %q (use file or postgres)", o.storeType)
 	}
 	if len(o.bankLayouts) == 0 {
 		o.bankLayouts = ingest.DefaultLayouts()
@@ -204,13 +223,21 @@ func readUTF8(path string) ([]byte, error) {
 }
 
 func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config, matcher matchFunc, stdout io.Writer, log *slog.Logger) error {
-	st := store.FileStore{Path: o.statePath}
+	st, cleanup, err := buildCLIStore(ctx, o, log)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	state, err := st.LoadState(ctx)
 	if err != nil {
 		return err
 	}
 	if err := state.Lock(o.tz, bankCfg.Layouts, ledgerCfg.Layouts); err != nil {
-		return fmt.Errorf("%s: %w", o.statePath, err)
+		if o.storeType == "file" {
+			return fmt.Errorf("%s: %w", o.statePath, err)
+		}
+		return err
 	}
 	bankRaw, err := readUTF8(o.bankPath)
 	if err != nil {
@@ -268,4 +295,23 @@ func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config,
 		"excluded_bank", rep.Summary.Excluded[domain.Bank], "excluded_ledger", rep.Summary.Excluded[domain.Ledger],
 		"out", o.outPath)
 	return nil
+}
+
+func buildCLIStore(ctx context.Context, o options, log *slog.Logger) (store.Store, func(), error) {
+	switch o.storeType {
+	case "postgres":
+		if err := postgres.Migrate(o.databaseURL); err != nil {
+			return nil, nil, fmt.Errorf("migrations: %w", err)
+		}
+		log.Info("migrations applied")
+		pool, err := pgxpool.New(ctx, o.databaseURL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("database connection: %w", err)
+		}
+		return postgres.New(pool), pool.Close, nil
+	case "file":
+		return store.FileStore{Path: o.statePath}, func() {}, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown store type %q", o.storeType)
+	}
 }
