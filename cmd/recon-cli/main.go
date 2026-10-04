@@ -18,12 +18,12 @@ import (
 	"github.com/mehmetkr/recon-go/internal/domain"
 	"github.com/mehmetkr/recon-go/internal/ingest"
 	"github.com/mehmetkr/recon-go/internal/match"
-	"github.com/mehmetkr/recon-go/internal/report"
+	"github.com/mehmetkr/recon-go/internal/recon"
 	"github.com/mehmetkr/recon-go/internal/store"
 )
 
-// matchFunc is the signature of the concurrent matcher.
-type matchFunc func(ctx context.Context, bank, ledger, taken []domain.Transaction, p match.Params, workers int) (match.Result, error)
+// matchFunc is the CLI alias for the matcher signature.
+type matchFunc = recon.MatchFunc
 
 // Exit codes.
 const (
@@ -142,18 +142,6 @@ func sameFile(a, b string) bool {
 	return errA == nil && errB == nil && os.SameFile(fa, fb)
 }
 
-// setAside splits records into those still free and those paired in an earlier run.
-func setAside(records []domain.Transaction, matched map[string]bool) (free, taken []domain.Transaction) {
-	for _, t := range records {
-		if matched[t.ID] {
-			taken = append(taken, t)
-		} else {
-			free = append(free, t)
-		}
-	}
-	return free, taken
-}
-
 func run(ctx context.Context, args []string, matcher matchFunc, stdout, stderr io.Writer) int {
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 
@@ -216,11 +204,11 @@ func readUTF8(path string) ([]byte, error) {
 }
 
 func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config, matcher matchFunc, stdout io.Writer, log *slog.Logger) error {
-	state, err := store.Load(o.statePath)
+	st := store.FileStore{Path: o.statePath}
+	state, err := st.LoadState(ctx)
 	if err != nil {
 		return err
 	}
-	// Settings that shape record identities must match the ones the state was built with.
 	if err := state.Lock(o.tz, bankCfg.Layouts, ledgerCfg.Layouts); err != nil {
 		return fmt.Errorf("%s: %w", o.statePath, err)
 	}
@@ -232,24 +220,6 @@ func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config,
 	if err != nil {
 		return err
 	}
-	cfg := store.Config{
-		AlgoVersion:   store.AlgoVersion,
-		TZ:            o.tz,
-		BankLayouts:   bankCfg.Layouts,
-		LedgerLayouts: ledgerCfg.Layouts,
-		DateTolerance: o.params.DateTolerance,
-		FuzzyWindow:   o.params.FuzzyWindow,
-		MinRefLen:     match.MinRefLen,
-		ThresholdNum:  match.ThresholdNum,
-		ThresholdDen:  match.ThresholdDen,
-	}
-	entry := store.Run{BankSHA: store.FileHash(bankRaw), LedgerSHA: store.FileHash(ledgerRaw), ConfigHash: store.ConfigHash(cfg)}
-	entry.RunID = store.RunID(entry.BankSHA, entry.LedgerSHA, entry.ConfigHash)
-	if state.HasRun(entry.RunID) && !o.force {
-		log.Info("already reconciled; nothing written (use -force to run again)", "run_id", entry.RunID)
-		return nil
-	}
-
 	bank, bankErrs, err := ingest.Parse(bytes.NewReader(bankRaw), domain.Bank, bankCfg)
 	if err != nil {
 		return fmt.Errorf("%s: %w", o.bankPath, err)
@@ -259,46 +229,43 @@ func reconcile(ctx context.Context, o options, bankCfg, ledgerCfg ingest.Config,
 		return fmt.Errorf("%s: %w", o.ledgerPath, err)
 	}
 
-	// Records paired in an earlier run are set aside: they never match again.
-	matchedBank, matchedLedger := state.MatchedIDs()
-	freeBank, takenBank := setAside(bank, matchedBank)
-	freeLedger, takenLedger := setAside(ledger, matchedLedger)
-
-	res, err := matcher(ctx, freeBank, freeLedger, append(takenBank, takenLedger...), o.params, o.workers)
-	if err != nil {
-		return err
-	}
-	rep := report.Build(report.Input{
-		RunID:     entry.RunID,
-		Config:    cfg,
-		Read:      map[domain.Source]int{domain.Bank: len(bank), domain.Ledger: len(ledger)},
-		Excluded:  map[domain.Source]int{domain.Bank: len(takenBank), domain.Ledger: len(takenLedger)},
-		Result:    res,
-		Malformed: append(bankErrs, ledgerErrs...),
+	svc := recon.Service{Matcher: matcher}
+	out, err := svc.Reconcile(ctx, state, recon.Input{
+		BankRaw:       bankRaw,
+		LedgerRaw:     ledgerRaw,
+		Bank:          bank,
+		Ledger:        ledger,
+		BankErrs:      bankErrs,
+		LedgerErrs:    ledgerErrs,
+		TZ:            o.tz,
+		BankLayouts:   bankCfg.Layouts,
+		LedgerLayouts: ledgerCfg.Layouts,
+		Params:        o.params,
+		Workers:       o.workers,
+		Force:         o.force,
 	})
-	out, err := report.Encode(rep)
 	if err != nil {
 		return err
 	}
-	if err := state.AddRun(entry, res.Matches); err != nil {
+	if out.Skipped {
+		log.Info("already reconciled; nothing written (use -force to run again)", "run_id", out.Report.RunID)
+		return nil
+	}
+	// The report is saved first: if it cannot be written, the state stays as it was.
+	if err := writeReport(ctx, o.outPath, out.Encoded, stdout); err != nil {
 		return err
 	}
-	// The report is saved first: if it cannot be written, the state file stays as it was.
-	if err := writeReport(ctx, o.outPath, out, stdout); err != nil {
+	if err := st.SaveState(ctx, state); err != nil {
 		return err
 	}
-	if err := state.Save(ctx, o.statePath); err != nil {
-		return err
-	}
-
-	s := rep.Summary
+	rep := out.Report
 	log.Info("reconciled",
-		"run_id", entry.RunID,
-		"bank", s.Read[domain.Bank], "ledger", s.Read[domain.Ledger],
+		"run_id", rep.RunID,
+		"bank", rep.Summary.Read[domain.Bank], "ledger", rep.Summary.Read[domain.Ledger],
 		"matched", len(rep.Matches),
 		"exceptions", len(rep.Exceptions),
 		"malformed", len(rep.Malformed),
-		"excluded_bank", s.Excluded[domain.Bank], "excluded_ledger", s.Excluded[domain.Ledger],
+		"excluded_bank", rep.Summary.Excluded[domain.Bank], "excluded_ledger", rep.Summary.Excluded[domain.Ledger],
 		"out", o.outPath)
 	return nil
 }

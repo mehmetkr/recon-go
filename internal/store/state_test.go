@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -172,11 +173,13 @@ func TestAddRun(t *testing.T) {
 		"bank twice in a run":   {match("b8", "l8"), match("b8", "l7")},
 		"ledger twice in a run": {match("b8", "l8"), match("b7", "l8")},
 	} {
-		// The refusal names the pair that could not be added.
 		last := batch[len(batch)-1]
 		err := s.AddRun(Run{RunID: "bad"}, batch)
 		if err == nil || !strings.Contains(err.Error(), last.BankID+" or "+last.LedgerID) || len(s.Matches) != 3 || len(s.Runs) != 2 {
 			t.Errorf("%s: accepted or left partly applied (%v)", name, err)
+		}
+		if !errors.Is(err, domain.ErrConflict) {
+			t.Errorf("%s: error is not ErrConflict: %v", name, err)
 		}
 	}
 }

@@ -14,19 +14,23 @@ import (
 
 // Store loads and saves reconciliation state.
 type Store interface {
-	Load(path string) (*State, error)
-	Save(ctx context.Context, state *State, path string) error
+	LoadState(ctx context.Context) (*State, error)
+	SaveState(ctx context.Context, state *State) error
 }
 
-// FileStore implements Store with JSON files.
-type FileStore struct{}
+// FileStore implements Store with JSON files on disk.
+type FileStore struct {
+	Path string
+}
 
-// Load reads the state file; a missing file is an empty state.
-func (FileStore) Load(path string) (*State, error) { return Load(path) }
+var _ Store = FileStore{}
 
-// Save writes the state file all at once.
-func (FileStore) Save(ctx context.Context, state *State, path string) error {
-	return state.Save(ctx, path)
+// LoadState reads the state file; a missing file is an empty state.
+func (f FileStore) LoadState(_ context.Context) (*State, error) { return Load(f.Path) }
+
+// SaveState writes the state file all at once.
+func (f FileStore) SaveState(ctx context.Context, state *State) error {
+	return state.Save(ctx, f.Path)
 }
 
 // The versions of the state format and of the record identity scheme.
@@ -130,7 +134,7 @@ func (s *State) AddRun(run Run, matches []domain.Match) error {
 		}
 		seen[m.MatchID] = true
 		if bank[m.BankID] || ledger[m.LedgerID] {
-			return fmt.Errorf("record matched twice: %s or %s is already paired", m.BankID, m.LedgerID)
+			return fmt.Errorf("%w: record matched twice: %s or %s is already paired", domain.ErrConflict, m.BankID, m.LedgerID)
 		}
 		bank[m.BankID], ledger[m.LedgerID] = true, true
 		added = append(added, m)
