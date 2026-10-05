@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -141,20 +140,6 @@ func TestWriteAtomicKeepsTheOldFile(t *testing.T) {
 			t.Cleanup(func() { beforeCommit = nil })
 			return ctx
 		},
-		"write fails part-way": func(t *testing.T, dir string) context.Context {
-			// Limit the file size so the write fails part-way.
-			var old syscall.Rlimit
-			if syscall.Getrlimit(syscall.RLIMIT_FSIZE, &old) != nil {
-				t.Skip("cannot read the file size limit")
-			}
-			limited := old
-			limited.Cur = 4096
-			if syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limited) != nil {
-				t.Skip("cannot lower the file size limit")
-			}
-			t.Cleanup(func() { syscall.Setrlimit(syscall.RLIMIT_FSIZE, &old) })
-			return context.Background()
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -171,6 +156,24 @@ func TestWriteAtomicKeepsTheOldFile(t *testing.T) {
 			assertOnlyFiles(t, dir, "results.json")
 		})
 	}
+
+	t.Run("write fails part-way", func(t *testing.T) {
+		afterCreate = func(f *os.File) { f.Close() }
+		t.Cleanup(func() { afterCreate = nil })
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "results.json")
+		if err := os.WriteFile(path, []byte("previous"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteAtomic(context.Background(), path, make([]byte, 64*1024)); err == nil {
+			t.Error("the write was reported as successful")
+		}
+		if b, _ := os.ReadFile(path); string(b) != "previous" {
+			t.Errorf("content = %q, want the old file untouched", b)
+		}
+		assertOnlyFiles(t, dir, "results.json")
+	})
 }
 
 func TestWriteAtomicFailures(t *testing.T) {

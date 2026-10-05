@@ -92,6 +92,9 @@ func cause(err error) error {
 // beforeCommit lets tests step in just before a file is saved.
 var beforeCommit func()
 
+// afterCreate lets tests act on the temp file before the write.
+var afterCreate func(*os.File)
+
 // WriteAtomic replaces a file all at once, or leaves it untouched if interrupted.
 func WriteAtomic(ctx context.Context, path string, data []byte) (err error) {
 	defer func() { err = cause(err) }() // the caller names the file, so only the reason is kept
@@ -109,6 +112,9 @@ func WriteAtomic(ctx context.Context, path string, data []byte) (err error) {
 			os.Remove(tmp.Name())
 		}
 	}()
+	if afterCreate != nil {
+		afterCreate(tmp)
+	}
 	if _, err = tmp.Write(data); err != nil {
 		return err
 	}
