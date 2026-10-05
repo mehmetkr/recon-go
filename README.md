@@ -18,6 +18,7 @@ The report lands in `results.json` by default. Pass `-out -` to write it to stan
 
 ```
 recon-cli -bank FILE -ledger FILE [-state state.json] [-out results.json|-]
+      [-store file|postgres] [-database-url URL]
       [-tz UTC] [-bank-date-layout L]... [-ledger-date-layout L]...
       [-date-tolerance 3] [-fuzzy-window 7] [-workers GOMAXPROCS] [-force]
 ```
@@ -28,6 +29,8 @@ recon-cli -bank FILE -ledger FILE [-state state.json] [-out results.json|-]
 | `-ledger` | (required) | Ledger export CSV |
 | `-out` | `results.json` | Report path, or `-` for stdout |
 | `-state` | `state.json` | Run memory: locks settings and tracks matches |
+| `-store` | `file` | Store backend: `file` or `postgres` |
+| `-database-url` | (empty) | PostgreSQL connection string (required when `-store=postgres`; falls back to `DATABASE_URL` env) |
 | `-tz` | `UTC` | IANA booking time zone |
 | `-bank-date-layout` | `2006-01-02`, RFC 3339 | Go date layout for bank dates (repeatable) |
 | `-ledger-date-layout` | `2006-01-02`, RFC 3339 | Go date layout for ledger dates (repeatable) |
@@ -105,9 +108,9 @@ Dates are calendar days stored as `int32` days since 1970-01-01. Timestamps with
 
 Reference similarity uses semi-global Levenshtein alignment: the shorter reference may match anywhere within the longer one. The alternative (global edit distance) penalizes length differences, making `INV10023` and `PAYMENT INV10023 CONFIRMED` look distant even though the invoice number is clearly present.
 
-### File store over a database
+### Dual store: file and PostgreSQL
 
-Persistence is a JSON file (`state.json`) written atomically. The alternative (PostgreSQL with row-level locking) would be needed for concurrent writers or a query interface, but the tool runs as a single CLI invocation. A file keeps the dependency footprint at zero and makes the state inspectable with any text editor.
+The CLI defaults to a JSON file (`state.json`) written atomically: zero dependencies, inspectable with any text editor, suitable for single-writer use. The HTTP server defaults to PostgreSQL, which supports concurrent writers and provides a query interface. Both backends implement the same `Store` interface, so the engine is unaware of which one is active.
 
 ## HTTP API
 
