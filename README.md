@@ -1,5 +1,7 @@
 # recon-go
 
+[![CI](https://github.com/mehmetkr/recon-go/actions/workflows/ci.yml/badge.svg)](https://github.com/mehmetkr/recon-go/actions/workflows/ci.yml)
+
 A bank-to-ledger reconciliation engine. It reads a bank statement CSV and a ledger export CSV, pairs the records that refer to the same real payment, and writes a JSON report listing every match, every unmatched record with a reason, and every malformed row.
 
 ## Quick start
